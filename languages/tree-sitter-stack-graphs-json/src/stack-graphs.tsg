@@ -1,0 +1,473 @@
+// Tree-sitter Stack Graphs definition for JSON
+// This file defines how JSON constructs are mapped to stack graph nodes and edges.
+
+// Attribute Shorthands
+attribute node_definition = node        => type = "pop_symbol", node_symbol = node, is_definition
+attribute node_reference = node         => type = "push_symbol", node_symbol = node, is_reference
+attribute pop_node = node               => type = "pop_symbol", node_symbol = node
+attribute pop_scoped_node = node        => type = "pop_scoped_symbol", node_symbol = node
+attribute pop_scoped_symbol = symbol    => type = "pop_scoped_symbol", symbol = symbol
+attribute pop_symbol = symbol           => type = "pop_symbol", symbol = symbol
+attribute push_node = node              => type = "push_symbol", node_symbol = node
+attribute push_scoped_node = node       => type = "push_scoped_symbol", node_symbol = node
+attribute push_scoped_symbol = symbol   => type = "push_scoped_symbol", symbol = symbol
+attribute push_symbol = symbol          => type = "push_symbol", symbol = symbol
+attribute scoped_node_definition = node => type = "pop_scoped_symbol", node_symbol = node, is_definition
+attribute scoped_node_reference = node  => type = "push_scoped_symbol", node_symbol = node, is_reference
+attribute symbol_definition = symbol    => type = "pop_symbol", symbol = symbol, is_definition
+attribute symbol_reference = symbol     => type = "push_symbol", symbol = symbol, is_reference
+
+attribute node_symbol = node            => symbol = (source-text node), source_node = node
+
+// Global Variables
+global JUMP_TO_SCOPE_NODE
+global ROOT_NODE
+global SCOPE_ROOT
+
+// Document Root
+(document)@doc {
+  node @doc.defs
+  node @doc.exports
+  node @doc.lexical_defs
+  node @doc.lexical_scope
+  node @doc.properties
+  node @doc.schemas
+  
+  // Establish document scope connections
+  edge @doc.lexical_scope -> @doc.defs
+  edge @doc.lexical_scope -> SCOPE_ROOT
+}
+
+// Root value scope propagation
+(document (_)@value)@doc {
+  // Propagate root scope to root value
+  edge @value.lexical_scope -> @doc.lexical_scope
+}
+
+// JSON Value nodes - define for all values
+[
+  (object)
+  (array)
+  (string)
+  (number)
+  (true)
+  (false)
+  (null)
+  (pair)
+]@value {
+  node @value.after_scope
+  node @value.lexical_scope
+}
+
+// Propagate scope to child elements in objects
+(object (pair)@pair)@obj {
+  // Propagate scope
+  edge @pair.lexical_scope -> @obj.after_scope
+}
+
+// Propagate scope to elements in arrays
+(array (_)@element)@arr {
+  // Propagate scope
+  edge @element.lexical_scope -> @arr.after_scope
+}
+
+// JSON object property declarations
+(pair
+  key: (string) @key
+  value: (_) @value) @property {
+  // Define property
+  attr (@key.def) node_definition = @key
+  attr (@key.def) definiens_node = @property
+  attr (@key.def) syntax_type = "property"
+  attr (@key.def) is_exported
+  
+  // Connect property definition
+  edge @property.after_scope -> @key.def
+  
+  // Make property available to parent scope
+  edge @doc.properties -> @key.def
+  
+  // Propagate scope to property value
+  edge @value.lexical_scope -> @property.after_scope
+  
+  // Remove quotes from key for easier reference
+  node clean_key
+  attr (clean_key) symbol = (replace (source-text @key) "[\"']" "")
+  attr (clean_key) source_node = @key
+  edge @key.def -> clean_key
+}
+
+// JSON object (scope)
+(object) @object {
+  node @object.after_scope
+  node @object.bottom
+  node drop_scope
+  
+  // Set up object scope
+  edge drop_scope -> @object.bottom
+  attr (drop_scope) type = "drop_scopes"
+  
+  // Allow property lookup in this object
+  node property_scope
+  attr (property_scope) symbol = "properties"
+  attr (property_scope) source_node = @object
+  edge @object.after_scope -> property_scope
+}
+
+// JSON array (scope with indexed elements)
+(array
+  ((_) @element)+) @array {
+  node @array.after_scope
+  node @array.bottom
+  node drop_scope
+  
+  // Store array indices
+  var index = 0
+  for-each @element {
+    node index_node
+    attr (index_node) symbol = (string index)
+    attr (index_node) source_node = @element
+    
+    attr (@element.index) array_index = index_node
+    edge @element.lexical_scope -> @array.after_scope
+    
+    set index = (+ index 1)
+  }
+  
+  // Set up array scope
+  edge drop_scope -> @array.bottom
+  attr (drop_scope) type = "drop_scopes"
+  
+  // Allow element lookup in this array
+  node elements_scope
+  attr (elements_scope) symbol = "elements"
+  attr (elements_scope) source_node = @array
+  edge @array.after_scope -> elements_scope
+}
+
+// JSON strings (potential identifiers - could be references to other fields or schemas)
+(string) @string {
+  node @string.ref
+  
+  // Reference string
+  attr (@string.ref) node_reference = @string
+  attr (@string.ref) syntax_type = "string_value"
+  
+  // String content without quotes
+  node string_content
+  attr (string_content) symbol = (replace (source-text @string) "[\"']" "")
+  attr (string_content) source_node = @string
+  edge @string.ref -> string_content
+}
+
+//
+// JSON Schema specific patterns
+//
+
+// Special handling for "$ref" properties in JSON Schema
+(pair
+  key: (string) @key
+  value: (string) @ref_value
+  (#eq? @key "\"$ref\"")) @ref_property {
+  node @ref_value.ref
+  
+  // Reference schema
+  attr (@ref_value.ref) node_reference = @ref_value
+  attr (@ref_value.ref) syntax_type = "schema_reference"
+  
+  // Connect reference
+  edge @ref_property.after -> @ref_value.ref
+  
+  // Look up reference in document scope
+  edge @ref_value.ref -> @doc.lexical_scope
+  
+  // Clean reference path
+  node ref_path
+  attr (ref_path) symbol = (replace (source-text @ref_value) "[\"']" "")
+  attr (ref_path) source_node = @ref_value
+  edge @ref_value.ref -> ref_path
+}
+
+// Special handling for "id" or "$id" properties in JSON Schema
+(pair
+  key: (string) @key
+  value: (string) @id_value
+  (#match? @key "\"(\\$id|id)\"")) @id_property {
+  // Define schema ID
+  attr (@id_value.def) node_definition = @id_value
+  attr (@id_value.def) definiens_node = @id_property
+  attr (@id_value.def) syntax_type = "schema_id"
+  attr (@id_value.def) is_exported
+  
+  // Connect schema ID definition
+  edge @id_property.after_scope -> @id_value.def
+  
+  // Add to document schemas
+  edge @doc.schemas -> @id_value.def
+  edge @doc.exports -> @id_value.def
+  
+  // Clean ID path
+  node id_path
+  attr (id_path) symbol = (replace (source-text @id_value) "[\"']" "")
+  attr (id_path) source_node = @id_value
+  edge @id_value.def -> id_path
+}
+
+// JSON Schema property definitions section
+(pair
+  key: (string) @key
+  value: (object) @prop_obj
+  (#eq? @key "\"properties\"")) @properties {
+  // Define properties section
+  attr (@properties.def) node_definition = @properties
+  attr (@properties.def) syntax_type = "schema_properties"
+  attr (@properties.def) is_exported
+  
+  // Connect properties definition
+  edge @properties.after_scope -> @properties.def
+  
+  // Make properties visible in document
+  edge @doc.defs -> @properties.def
+  
+  // Propagate scope to properties object
+  edge @prop_obj.lexical_scope -> @properties.after_scope
+}
+
+// JSON Schema property definition items
+(pair
+  key: (string) @prop_name
+  value: (object) @prop_schema
+  (#parent-is-pair? @prop_name "\"properties\"")) @prop_def {
+  // Define property schema
+  attr (@prop_name.def) node_definition = @prop_name
+  attr (@prop_name.def) definiens_node = @prop_def
+  attr (@prop_name.def) syntax_type = "schema_property"
+  attr (@prop_name.def) is_exported
+  
+  // Connect property schema definition
+  edge @prop_def.after_scope -> @prop_name.def
+  
+  // Add to document properties
+  edge @doc.properties -> @prop_name.def
+  
+  // Clean property name
+  node clean_prop_name
+  attr (clean_prop_name) symbol = (replace (source-text @prop_name) "[\"']" "")
+  attr (clean_prop_name) source_node = @prop_name
+  edge @prop_name.def -> clean_prop_name
+  
+  // Propagate scope to property schema object
+  edge @prop_schema.lexical_scope -> @prop_def.after_scope
+}
+
+// JSON Schema type definitions
+(pair
+  key: (string) @key
+  value: (string) @type_value
+  (#eq? @key "\"type\"")) @type_def {
+  // Store JSON type info
+  attr (@type_value.info) json_type = @type_value
+  
+  // Add type information
+  node type_info
+  attr (type_info) symbol = (replace (source-text @type_value) "[\"']" "")
+  attr (type_info) source_node = @type_value
+  edge @type_def.after_scope -> type_info
+}
+
+// JSON Schema required properties
+(pair
+  key: (string) @key
+  value: (array) @req_array
+  (#eq? @key "\"required\"")) @required {
+  // Store required properties info
+  attr (@required.info) required_properties = @req_array
+  
+  // Create required flag for each property
+  for-each @req_array.element {
+    node req_prop
+    attr (req_prop) symbol = (format "required:%s" (replace (source-text @element) "[\"']" ""))
+    attr (req_prop) source_node = @element
+    edge @required.after_scope -> req_prop
+  }
+}
+
+// JSON Schema definitions/schemas section
+(pair
+  key: (string) @key
+  value: (object) @defs_obj
+  (#match? @key "\"(definitions|\\$defs|schemas)\"")) @definitions {
+  // Define schema definitions section
+  attr (@definitions.def) node_definition = @definitions
+  attr (@definitions.def) syntax_type = "schema_definitions"
+  attr (@definitions.def) is_exported
+  
+  // Connect schema definitions section
+  edge @definitions.after_scope -> @definitions.def
+  
+  // Add to document schemas
+  edge @doc.schemas -> @definitions.def
+  
+  // Create definitions scope
+  node defs_scope
+  attr (defs_scope) symbol = "definitions"
+  attr (defs_scope) source_node = @definitions
+  edge @definitions.after_scope -> defs_scope
+  
+  // Propagate scope to definitions object
+  edge @defs_obj.lexical_scope -> @definitions.after_scope
+}
+
+// JSON Schema definition items
+(pair
+  key: (string) @def_name
+  value: (object) @def_schema
+  (#parent-is-pair? @def_name "\"(definitions|\\$defs|schemas)\"")) @schema_def {
+  // Define schema definition
+  attr (@def_name.def) node_definition = @def_name
+  attr (@def_name.def) definiens_node = @schema_def
+  attr (@def_name.def) syntax_type = "schema_definition"
+  attr (@def_name.def) is_exported
+  
+  // Connect schema definition
+  edge @schema_def.after_scope -> @def_name.def
+  
+  // Add to document schemas
+  edge @doc.schemas -> @def_name.def
+  
+  // Clean definition name
+  node clean_def_name
+  attr (clean_def_name) symbol = (replace (source-text @def_name) "[\"']" "")
+  attr (clean_def_name) source_node = @def_name
+  edge @def_name.def -> clean_def_name
+  
+  // Propagate scope to definition schema object
+  edge @def_schema.lexical_scope -> @schema_def.after_scope
+}
+
+// JSON Schema enum values
+(pair
+  key: (string) @key
+  value: (array) @enum_array
+  (#eq? @key "\"enum\"")) @enum_def {
+  // Store enum values info
+  attr (@enum_def.info) enum_values = @enum_array
+  
+  // Create enum scope
+  node enum_scope
+  attr (enum_scope) symbol = "enum"
+  attr (enum_scope) source_node = @enum_def
+  edge @enum_def.after_scope -> enum_scope
+  
+  // Add individual enum values
+  var index = 0
+  for-each @enum_array.element {
+    node enum_value
+    attr (enum_value) symbol = (format "enum_%d" index)
+    attr (enum_value) source_node = @element
+    edge enum_scope -> enum_value
+    
+    set index = (+ index 1)
+  }
+}
+
+// JSON Schema "oneOf", "anyOf", "allOf" references
+(pair
+  key: (string) @key
+  value: (array) @schemas
+  (#match? @key "\"(oneOf|anyOf|allOf)\"")) @schema_composition {
+  // Store composition type info
+  attr (@schema_composition.info) composition_type = @key
+  attr (@schema_composition.info) composition_schemas = @schemas
+  
+  // Create composition scope
+  node comp_type
+  attr (comp_type) symbol = (replace (source-text @key) "[\"']" "")
+  attr (comp_type) source_node = @key
+  edge @schema_composition.after_scope -> comp_type
+  
+  // Propagate scope to schemas array
+  edge @schemas.lexical_scope -> @schema_composition.after_scope
+}
+
+// JSON Schema pattern properties
+(pair
+  key: (string) @key
+  value: (object) @patterns
+  (#eq? @key "\"patternProperties\"")) @pattern_props {
+  // Store pattern properties info
+  attr (@pattern_props.info) pattern_properties = @patterns
+  
+  // Create pattern properties scope
+  node patterns_scope
+  attr (patterns_scope) symbol = "pattern_properties"
+  attr (patterns_scope) source_node = @pattern_props
+  edge @pattern_props.after_scope -> patterns_scope
+  
+  // Propagate scope to patterns object
+  edge @patterns.lexical_scope -> @pattern_props.after_scope
+}
+
+// JSON Schema pattern property definition
+(pair
+  key: (string) @pattern
+  value: (object) @pattern_schema
+  (#parent-is-pair? @pattern "\"patternProperties\"")) @pattern_def {
+  // Define pattern property
+  attr (@pattern.def) node_definition = @pattern
+  attr (@pattern.def) definiens_node = @pattern_def
+  attr (@pattern.def) syntax_type = "pattern_property"
+  
+  // Connect pattern property definition
+  edge @pattern_def.after_scope -> @pattern.def
+  
+  // Clean pattern
+  node clean_pattern
+  attr (clean_pattern) symbol = (replace (source-text @pattern) "[\"']" "")
+  attr (clean_pattern) source_node = @pattern
+  edge @pattern.def -> clean_pattern
+  
+  // Propagate scope to pattern schema object
+  edge @pattern_schema.lexical_scope -> @pattern_def.after_scope
+}
+
+// JSON Schema property references in "dependencies"
+(pair
+  key: (string) @key
+  value: (object) @deps
+  (#eq? @key "\"dependencies\"")) @dependencies {
+  // Store dependencies info
+  attr (@dependencies.info) dependency_properties = @deps
+  
+  // Create dependencies scope
+  node deps_scope
+  attr (deps_scope) symbol = "dependencies"
+  attr (deps_scope) source_node = @dependencies
+  edge @dependencies.after_scope -> deps_scope
+  
+  // Propagate scope to dependencies object
+  edge @deps.lexical_scope -> @dependencies.after_scope
+}
+
+// JSON Schema dependency definition
+(pair
+  key: (string) @dep_name
+  value: (_) @dep_value
+  (#parent-is-pair? @dep_name "\"dependencies\"")) @dep_def {
+  // Define dependency
+  attr (@dep_name.def) node_definition = @dep_name
+  attr (@dep_name.def) definiens_node = @dep_def
+  attr (@dep_name.def) syntax_type = "dependency"
+  
+  // Connect dependency definition
+  edge @dep_def.after_scope -> @dep_name.def
+  
+  // Clean dependency name
+  node clean_dep_name
+  attr (clean_dep_name) symbol = (replace (source-text @dep_name) "[\"']" "")
+  attr (clean_dep_name) source_node = @dep_name
+  edge @dep_name.def -> clean_dep_name
+  
+  // Propagate scope to dependency value
+  edge @dep_value.lexical_scope -> @dep_def.after_scope
+}

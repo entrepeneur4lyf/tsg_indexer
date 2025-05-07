@@ -1,0 +1,187 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/tree-sitter-stack-graphs-json-examples",
+  "title": "JSON Examples",
+  "description": "Examples of various JSON structures and JSON Schema features for tree-sitter-stack-graphs",
+  
+  "definitions": {
+    "address": {
+      "type": "object",
+      "properties": {
+        "street": { "type": "string" },
+        "city": { "type": "string" },
+        "state": { "type": "string" },
+        "zipCode": { "type": "string", "pattern": "^\\d{5}(-\\d{4})?$" }
+      },
+      "required": ["street", "city", "state", "zipCode"]
+    },
+    
+    "person": {
+      "type": "object",
+      "properties": {
+        "firstName": { "type": "string" },
+        "lastName": { "type": "string" },
+        "age": { 
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 120
+        },
+        "email": {
+          "type": "string",
+          "format": "email"
+        },
+        "address": { "$ref": "#/definitions/address" },
+        "phoneNumbers": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": ["home", "work", "mobile"]
+              },
+              "number": {
+                "type": "string",
+                "pattern": "^\\(\\d{3}\\) \\d{3}-\\d{4}$"
+              }
+            },
+            "required": ["type", "number"]
+          }
+        }
+      },
+      "required": ["firstName", "lastName", "age"]
+    }
+  },
+  
+  "type": "object",
+  "properties": {
+    "people": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/person" }
+    },
+    "metadata": {
+      "type": "object",
+      "properties": {
+        "lastUpdated": { "type": "string", "format": "date-time" },
+        "version": { "type": "string" },
+        "tags": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "settings": {
+      "type": "object",
+      "additionalProperties": true,
+      "patternProperties": {
+        "^config_.+$": { "type": "string" }
+      }
+    }
+  },
+  
+  "allOf": [
+    {
+      "required": ["people"]
+    },
+    {
+      "required": ["metadata"]
+    }
+  ],
+  
+  "anyOf": [
+    {
+      "properties": {
+        "people": {
+          "minItems": 1
+        }
+      }
+    },
+    {
+      "properties": {
+        "settings": {
+          "required": ["config_initialized"]
+        }
+      }
+    }
+  ],
+  
+  "oneOf": [
+    {
+      "properties": {
+        "metadata": {
+          "properties": {
+            "version": { "enum": ["1.0", "1.1", "1.2"] }
+          }
+        }
+      }
+    },
+    {
+      "properties": {
+        "metadata": {
+          "properties": {
+            "version": { "enum": ["2.0", "2.1"] }
+          }
+        }
+      }
+    }
+  ],
+  
+  "examples": [
+    {
+      "people": [
+        {
+          "firstName": "John",
+          "lastName": "Doe",
+          "age": 30,
+          "email": "john.doe@example.com",
+          "address": {
+            "street": "123 Main St",
+            "city": "Anytown",
+            "state": "CA",
+            "zipCode": "12345"
+          },
+          "phoneNumbers": [
+            {
+              "type": "home",
+              "number": "(555) 123-4567"
+            },
+            {
+              "type": "work",
+              "number": "(555) 987-6543"
+            }
+          ]
+        },
+        {
+          "firstName": "Jane",
+          "lastName": "Smith",
+          "age": 25,
+          "email": "jane.smith@example.com",
+          "address": {
+            "street": "456 Oak Ave",
+            "city": "Somewhere",
+            "state": "NY",
+            "zipCode": "67890"
+          },
+          "phoneNumbers": [
+            {
+              "type": "mobile",
+              "number": "(555) 555-5555"
+            }
+          ]
+        }
+      ],
+      "metadata": {
+        "lastUpdated": "2023-05-15T14:30:00Z",
+        "version": "1.1",
+        "tags": ["example", "demo", "test"]
+      },
+      "settings": {
+        "config_initialized": "true",
+        "config_theme": "dark",
+        "config_language": "en-US",
+        "notification_enabled": true
+      }
+    }
+  ]
+}
+

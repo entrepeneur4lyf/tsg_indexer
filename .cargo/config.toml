@@ -1,0 +1,7 @@
+[lints]
+workspace = true
+
+[lints.rust]
+dead_code = { level = "allow", paths = ["examples/"] }
+unused_variables = { level = "allow", paths = ["examples/"] }
+unused_imports = { level = "allow", paths = ["examples/"] }

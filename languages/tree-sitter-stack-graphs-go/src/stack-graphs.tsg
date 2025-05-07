@@ -1,0 +1,634 @@
+;; -*- coding: utf-8 -*-
+;; ------------------------------------------------------------------------------------------------
+;; Copyright © 2023, tsg_indexer authors.
+;; Licensed under either of Apache License, Version 2.0, or MIT license, at your option.
+;; ------------------------------------------------------------------------------------------------
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Stack graphs definition for Go
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;; Global Variables
+;; ^^^^^^^^^^^^^^^^
+
+global FILE_PATH           ; project relative path of this file
+global PROJECT_NAME = ""   ; project name, used to isolate different projects in the same stack graph
+global ROOT_PATH = ""      ; path to the project root directory
+
+global JUMP_TO_SCOPE_NODE
+global ROOT_NODE
+global SCOPE_ROOT
+
+;; Attribute Shorthands
+;; ^^^^^^^^^^^^^^^^^^^^
+
+attribute node_definition = node        => type = "pop_symbol", node_symbol = node, is_definition
+attribute node_reference = node         => type = "push_symbol", node_symbol = node, is_reference
+attribute pop_node = node               => type = "pop_symbol", node_symbol = node
+attribute pop_scoped_node = node        => type = "pop_scoped_symbol", node_symbol = node
+attribute pop_scoped_symbol = symbol    => type = "pop_scoped_symbol", symbol = symbol
+attribute pop_symbol = symbol           => type = "pop_symbol", symbol = symbol
+attribute push_node = node              => type = "push_symbol", node_symbol = node
+attribute push_scoped_node = node       => type = "push_scoped_symbol", node_symbol = node
+attribute push_scoped_symbol = symbol   => type = "push_scoped_symbol", symbol = symbol
+attribute push_symbol = symbol          => type = "push_symbol", symbol = symbol
+attribute scoped_node_definition = node => type = "pop_scoped_symbol", node_symbol = node, is_definition
+attribute scoped_node_reference = node  => type = "push_scoped_symbol", node_symbol = node, is_reference
+attribute symbol_definition = symbol    => type = "pop_symbol", symbol = symbol, is_definition
+attribute symbol_reference = symbol     => type = "push_symbol", symbol = symbol, is_reference
+
+attribute node_symbol = node            => symbol = (source-text node), source_node = node
+
+;; Root Node
+;; ^^^^^^^^^
+
+(source_file) @root {
+  node @root.defs
+  node @root.exports
+  node @root.lexical_defs
+  node @root.lexical_scope
+  node @root.type_scope
+  node @root.namespace_scope
+  
+  ; Connect source file to global scope
+  edge @root.lexical_scope -> SCOPE_ROOT
+  edge @root.lexical_scope -> @root.defs
+}
+
+;; Package Declaration
+;; ^^^^^^^^^^^^^^^^^
+
+(source_file
+  (package_clause 
+    name: (identifier) @name)) @file {
+  node @file.package_def
+  node @file.package_ref
+  
+  ; Define the package
+  attr (@name.def) node_definition = @name
+  attr (@name.def) definiens_node = @file
+  attr (@name.def) syntax_type = "package"
+  
+  ; Connect the package to the file
+  edge @file.after_scope -> @name.def
+  edge @name.def -> @file.package_def
+  
+  ; Make package name accessible from global scope
+  edge ROOT_NODE -> @name.def
+  
+  ; Make package exported
+  attr (@name.def) is_exported
+}
+
+;; Import Declaration
+;; ^^^^^^^^^^^^^^^^
+
+(import_declaration
+  (import_spec
+    path: (interpreted_string_literal) @path
+    name: (identifier)? @name)) @import {
+  node @import.defs
+  node @import.imports_ref
+  
+  ; Extract package name from the import path
+  let import_path = (source-text @path)
+  ; Remove quotes
+  let clean_path = (replace import_path "\"" "")
+  ; Get last segment of the path
+  scan clean_path {
+    "([^/]+)$" {
+      ; Define the import
+      node import_def
+      attr (import_def) pop_symbol = $1, is_definition, source_node = @import
+      
+      edge @import.after_scope -> import_def
+      
+      ; If an alias is provided, use it instead
+      if present @name {
+        node alias_def
+        attr (alias_def) node_definition = @name
+        attr (alias_def) syntax_type = "import_alias"
+        
+        edge import_def -> alias_def
+      }
+    }
+  }
+}
+
+;; Function Declaration
+;; ^^^^^^^^^^^^^^^^^^
+
+(function_declaration
+  name: (identifier) @name
+  parameters: (parameter_list) @params
+  result: (_)? @result
+  body: (block) @body) @function {
+  node @function.defs
+  node @function.exports
+  node @function.lexical_scope
+  node @function.call
+  node @function.return_value
+  node @function.drop_scope
+  
+  ; Define the function
+  attr (@name.def) node_definition = @name
+  attr (@name.def) definiens_node = @function
+  attr (@name.def) syntax_type = "function"
+  
+  ; Connect function to parent scope
+  edge @function.lexical_scope -> @function.before_scope
+  edge @function.lexical_scope -> @function.defs
+  
+  ; Connect the function definition
+  edge @function.after_scope -> @name.def
+  edge @name.def -> @function.call
+  
+  ; Connect the function body and parameters
+  edge @params.before_scope -> @function.lexical_scope
+  edge @body.before_scope -> @params.after_scope
+  
+  ; Connect function calls
+  edge @function.call -> @function.return_value
+  edge @function.drop_scope -> @function.bottom
+  
+  ; Set node attributes
+  attr (@function.call) pop_scoped_symbol = "()"
+  attr (@function.drop_scope) type = "drop_scopes"
+  
+  ; Export functions with capital first letter
+  scan (source-text @name) {
+    "^[A-Z]" {
+      attr (@name.def) is_exported
+      attr (@function.return_value) is_exported
+    }
+  }
+}
+
+;; Method Declaration
+;; ^^^^^^^^^^^^^^^^
+
+(method_declaration
+  receiver: (parameter_list) @receiver
+  name: (field_identifier) @name
+  parameters: (parameter_list) @params
+  result: (_)? @result
+  body: (block) @body) @method {
+  node @method.defs
+  node @method.exports
+  node @method.lexical_scope
+  node @method.call
+  node @method.return_value
+  node @method.drop_scope
+  
+  ; Define the method
+  attr (@name.def) node_definition = @name
+  attr (@name.def) definiens_node = @method
+  attr (@name.def) syntax_type = "method"
+  
+  ; Connect method to parent scope
+  edge @method.lexical_scope -> @method.before_scope
+  edge @method.lexical_scope -> @method.defs
+  
+  ; Connect the method definition
+  edge @method.after_scope -> @name.def
+  edge @name.def -> @method.call
+  
+  ; Connect the receiver, parameters, and body
+  edge @receiver.before_scope -> @method.lexical_scope
+  edge @params.before_scope -> @receiver.after_scope
+  edge @body.before_scope -> @params.after_scope
+  
+  ; Connect method calls
+  edge @method.call -> @method.return_value
+  edge @method.drop_scope -> @method.bottom
+  
+  ; Set node attributes
+  attr (@method.call) pop_scoped_symbol = "()"
+  attr (@method.drop_scope) type = "drop_scopes"
+  
+  ; Export methods with capital first letter
+  scan (source-text @name) {
+    "^[A-Z]" {
+      attr (@name.def) is_exported
+      attr (@method.return_value) is_exported
+    }
+  }
+}
+
+;; Struct Declaration
+;; ^^^^^^^^^^^^^^^^
+
+(type_declaration
+  (type_spec 
+    name: (type_identifier) @name
+    type: (struct_type
+            fields: (field_declaration_list) @fields)) @struct) {
+  node @struct.defs
+  node @struct.exports
+  node @struct.lexical_scope
+  node @struct.type_scope
+  
+  ; Define the struct
+  attr (@name.def) node_definition = @name
+  attr (@name.def) definiens_node = @struct
+  attr (@name.def) syntax_type = "struct"
+  
+  ; Connect struct to parent scope
+  edge @struct.lexical_scope -> @struct.before_scope
+  edge @struct.lexical_scope -> @struct.defs
+  
+  ; Connect the struct definition
+  edge @struct.after_scope -> @name.def
+  
+  ; Connect struct fields to struct definition
+  edge @fields.before_scope -> @struct.lexical_scope
+  
+  ; Export structs with capital first letter
+  scan (source-text @name) {
+    "^[A-Z]" {
+      attr (@name.def) is_exported
+    }
+  }
+}
+
+;; Interface Declaration
+;; ^^^^^^^^^^^^^^^^^^^
+
+(type_declaration
+  (type_spec 
+    name: (type_identifier) @name
+    type: (interface_type
+            methods: (method_spec_list) @methods)) @interface) {
+  node @interface.defs
+  node @interface.exports
+  node @interface.lexical_scope
+  
+  ; Define the interface
+  attr (@name.def) node_definition = @name
+  attr (@name.def) definiens_node = @interface
+  attr (@name.def) syntax_type = "interface"
+  
+  ; Connect interface to parent scope
+  edge @interface.lexical_scope -> @interface.before_scope
+  edge @interface.lexical_scope -> @interface.defs
+  
+  ; Connect the interface definition
+  edge @interface.after_scope -> @name.def
+  
+  ; Connect interface methods to interface definition
+  edge @methods.before_scope -> @interface.lexical_scope
+  
+  ; Export interfaces with capital first letter
+  scan (source-text @name) {
+    "^[A-Z]" {
+      attr (@name.def) is_exported
+    }
+  }
+}
+
+;; Interface Method Spec
+;; ^^^^^^^^^^^^^^^^^^^
+
+(method_spec
+  name: (field_identifier) @name) @method_spec {
+  ; Define the method spec
+  attr (@name.def) node_definition = @name
+  attr (@name.def) definiens_node = @method_spec
+  attr (@name.def) syntax_type = "interface_method"
+  
+  ; Connect method spec to parent interface
+  edge @method_spec.after_scope -> @name.def
+  
+  ; Export method specs with capital first letter
+  scan (source-text @name) {
+    "^[A-Z]" {
+      attr (@name.def) is_exported
+    }
+  }
+}
+
+;; Struct Field Declaration
+;; ^^^^^^^^^^^^^^^^^^^^^^
+
+(field_declaration
+  name: (field_identifier) @name) @field {
+  ; Define the field
+  attr (@name.def) node_definition = @name
+  attr (@name.def) definiens_node = @field
+  attr (@name.def) syntax_type = "field"
+  
+  ; Connect field to parent struct
+  edge @field.after_scope -> @name.def
+  
+  ; Export fields with capital first letter
+  scan (source-text @name) {
+    "^[A-Z]" {
+      attr (@name.def) is_exported
+    }
+  }
+}
+
+;; Type Alias
+;; ^^^^^^^^^
+
+(type_declaration
+  (type_spec 
+    name: (type_identifier) @name
+    type: (_) @type)) @type_alias {
+  ; Don't handle struct and interface types here (they're handled separately)
+  if not (is-type @type "struct_type") {
+    if not (is-type @type "interface_type") {
+      node @type_alias.defs
+      
+      ; Define the type alias
+      attr (@name.def) node_definition = @name
+      attr (@name.def) definiens_node = @type_alias
+      attr (@name.def) syntax_type = "type_alias"
+      
+      ; Connect type alias to parent scope
+      edge @type_alias.after_scope -> @name.def
+      
+      ; Export type aliases with capital first letter
+      scan (source-text @name) {
+        "^[A-Z]" {
+          attr (@name.def) is_exported
+        }
+      }
+    }
+  }
+}
+
+;; Variable Declaration
+;; ^^^^^^^^^^^^^^^^^
+
+(var_declaration
+  (var_spec
+    name: (identifier) @name
+    value: (_)? @value)) @var {
+  node @var.defs
+  
+  ; Define the variable
+  attr (@name.def) node_definition = @name
+  attr (@name.def) definiens_node = @var
+  attr (@name.def) syntax_type = "variable"
+  
+  ; Connect variable to parent scope
+  edge @var.after_scope -> @name.def
+  
+  ; Connect value to variable if present
+  if present @value {
+    edge @value.before_scope -> @var.before_scope
+  }
+  
+  ; Export variables with capital first letter
+  scan (source-text @name) {
+    "^[A-Z]" {
+      attr (@name.def) is_exported
+    }
+  }
+}
+
+;; Constant Declaration
+;; ^^^^^^^^^^^^^^^^^
+
+(const_declaration
+  (const_spec
+    name: (identifier) @name
+    value: (_)? @value)) @const {
+  node @const.defs
+  
+  ; Define the constant
+  attr (@name.def) node_definition = @name
+  attr (@name.def) definiens_node = @const
+  attr (@name.def) syntax_type = "constant"
+  
+  ; Connect constant to parent scope
+  edge @const.after_scope -> @name.def
+  
+  ; Connect value to constant if present
+  if present @value {
+    edge @value.before_scope -> @const.before_scope
+  }
+  
+  ; Export constants with capital first letter
+  scan (source-text @name) {
+    "^[A-Z]" {
+      attr (@name.def) is_exported
+    }
+  }
+}
+
+;; Short Variable Declaration
+;; ^^^^^^^^^^^^^^^^^^^^^^^^
+
+(short_var_declaration
+  left: (expression_list 
+          (identifier) @name)
+  right: (expression_list (_) @value)) @short_var {
+  node @short_var.defs
+  
+  ; Define the variable
+  attr (@name.def) node_definition = @name
+  attr (@name.def) definiens_node = @short_var
+  attr (@name.def) syntax_type = "variable"
+  
+  ; Connect variable to parent scope
+  edge @short_var.after_scope -> @name.def
+  
+  ; Connect value to variable
+  edge @value.before_scope -> @short_var.before_scope
+}
+
+;; Parameter Declaration
+;; ^^^^^^^^^^^^^^^^^^^
+
+(parameter_declaration
+  name: (identifier) @name) @param {
+  ; Define the parameter
+  attr (@name.def) node_definition = @name
+  attr (@name.def) definiens_node = @param
+  attr (@name.def) syntax_type = "parameter"
+  
+  ; Connect parameter to params list
+  edge @param.after_scope -> @name.def
+}
+
+;; Selector Expression (Field/Method Access)
+;; ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+(selector_expression
+  operand: (_) @base
+  field: (field_identifier) @field) @selector {
+  node @selector.ref
+  
+  ; Reference the field or method
+  attr (@selector.ref) node_reference = @field
+  
+  ; Connect selector to base and field
+  edge @selector.ref -> @base.ref
+}
+
+;; Call Expression
+;; ^^^^^^^^^^^^^
+
+(call_expression
+  function: (_) @func
+  arguments: (argument_list) @args) @call {
+  node @call.ref
+  node @call.args
+  
+  ; Reference the function or method
+  attr (@call.ref) node_reference = @func
+  
+  ; Connect call to function and arguments
+  edge @call.ref -> @func.ref
+  edge @args.before_scope -> @call.before_scope
+}
+
+;; Variable/Identifier Reference
+;; ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+(identifier) @name {
+  node @name.ref
+  node @name.def
+  
+  ; Reference the variable/identifier
+  attr (@name.ref) node_reference = @name
+  
+  ; Connect reference to scope
+  edge @name.ref -> @name.before_scope
+}
+
+;; Type Reference
+;; ^^^^^^^^^^^^
+
+(type_identifier) @name {
+  node @name.ref
+  node @name.def
+  
+  ; Reference the type
+  attr (@name.ref) node_reference = @name
+  
+  ; Connect reference to scope
+  edge @name.ref -> @name.before_scope
+}
+
+;; Qualified Identifier (Package Access)
+;; ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+(selector_expression
+  operand: (identifier) @package
+  field: (_) @field) @qualified {
+  node push_package
+  
+  ; Set up package access
+  attr (push_package) push_symbol = "."
+  
+  ; Connect field to package
+  edge @field.ref -> push_package
+  edge push_package -> @package.ref
+}
+
+;; Block Structure
+;; ^^^^^^^^^^^^^
+
+(block) @block {
+  node @block.before_scope
+  node @block.after_scope
+  node @block.defs
+  
+  ; Connect block to parent scope and its own scope
+  edge @block.before_scope -> @block.defs
+}
+
+(block (_) @stmt .) @block {
+  ; Connect first statement to block
+  edge @block.after_scope -> @stmt.after_scope
+}
+
+(block (_) @stmt1 . (_) @stmt2) {
+  ; Connect statements in sequence
+  edge @stmt2.before_scope -> @stmt1.after_scope
+}
+
+(block . (_) @stmt) @block {
+  ; Connect block to its first statement
+  edge @stmt.before_scope -> @block.before_scope
+}
+
+;; For Loop
+;; ^^^^^^^
+
+(for_statement
+  body: (block) @body) @for {
+  node @for.defs
+  node @for.lexical_scope
+  
+  ; Connect for loop to parent scope
+  edge @for.lexical_scope -> @for.before_scope
+  edge @for.lexical_scope -> @for.defs
+  
+  ; Connect body to for loop
+  edge @body.before_scope -> @for.lexical_scope
+}
+
+;; Range Loop
+;; ^^^^^^^^^
+
+(range_clause
+  left: (expression_list 
+          (identifier) @name)
+  right: (_) @expr) @range {
+  ; Define the iteration variable
+  attr (@name.def) node_definition = @name
+  attr (@name.def) definiens_node = @range
+  attr (@name.def) syntax_type = "variable"
+  
+  ; Connect variable to parent scope
+  edge @range.after_scope -> @name.def
+  
+  ; Connect expression to range clause
+  edge @expr.before_scope -> @range.before_scope
+}
+
+;; If Statement
+;; ^^^^^^^^^^^
+
+(if_statement
+  body: (block) @body) @if {
+  node @if.defs
+  node @if.lexical_scope
+  
+  ; Connect if statement to parent scope
+  edge @if.lexical_scope -> @if.before_scope
+  edge @if.lexical_scope -> @if.defs
+  
+  ; Connect body to if statement
+  edge @body.before_scope -> @if.lexical_scope
+}
+
+;; Function Literals
+;; ^^^^^^^^^^^^^^^
+
+(func_literal
+  parameters: (parameter_list) @params
+  body: (block) @body) @func_lit {
+  node @func_lit.defs
+  node @func_lit.lexical_scope
+  node @func_lit.drop_scope
+  
+  ; Connect function literal to parent scope
+  edge @func_lit.lexical_scope -> @func_lit.before_scope
+  edge @func_lit.lexical_scope -> @func_lit.defs
+  
+  ; Connect the parameters and body
+  edge @params.before_scope -> @func_lit.lexical_scope
+  edge @body.before_scope -> @params.after_scope
+  
+  ; Handle closure scope
+  edge @func_lit.drop_scope -> @func_lit.bottom
+  attr (@func_lit.drop_scope) type = "drop_scopes"
+}
+
+;; The End
+;; ^^^^^^

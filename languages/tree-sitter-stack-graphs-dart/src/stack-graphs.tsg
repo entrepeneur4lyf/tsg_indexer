@@ -1,0 +1,1022 @@
+;; -*- coding: utf-8 -*-
+;; ------------------------------------------------------------------------------------------------
+;; Copyright © 2023, tsg_indexer authors.
+;; Licensed under either of Apache License, Version 2.0, or MIT license, at your option.
+;; ------------------------------------------------------------------------------------------------
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Stack graphs definition for Dart
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;; Global Variables
+;; ^^^^^^^^^^^^^^^^
+
+global FILE_PATH           ; project relative path of this file
+global PROJECT_NAME = ""   ; project name, used to isolate different projects in the same stack graph
+global ROOT_PATH = ""      ; path to the project root directory
+
+global JUMP_TO_SCOPE_NODE
+global ROOT_NODE
+global SCOPE_ROOT
+
+;; Attribute Shorthands
+;; ^^^^^^^^^^^^^^^^^^^^
+
+attribute node_definition = node        => type = "pop_symbol", node_symbol = node, is_definition
+attribute node_reference = node         => type = "push_symbol", node_symbol = node, is_reference
+attribute pop_node = node               => type = "pop_symbol", node_symbol = node
+attribute pop_scoped_node = node        => type = "pop_scoped_symbol", node_symbol = node
+attribute pop_scoped_symbol = symbol    => type = "pop_scoped_symbol", symbol = symbol
+attribute pop_symbol = symbol           => type = "pop_symbol", symbol = symbol
+attribute push_node = node              => type = "push_symbol", node_symbol = node
+attribute push_scoped_node = node       => type = "push_scoped_symbol", node_symbol = node
+attribute push_scoped_symbol = symbol   => type = "push_scoped_symbol", symbol = symbol
+attribute push_symbol = symbol          => type = "push_symbol", symbol = symbol
+attribute scoped_node_definition = node => type = "pop_scoped_symbol", node_symbol = node, is_definition
+attribute scoped_node_reference = node  => type = "push_scoped_symbol", node_symbol = node, is_reference
+attribute symbol_definition = symbol    => type = "pop_symbol", symbol = symbol, is_definition
+attribute symbol_reference = symbol     => type = "push_symbol", symbol = symbol, is_reference
+
+attribute node_symbol = node            => symbol = (source-text node), source_node = node
+
+;; Root Node
+;; ^^^^^^^^^
+
+(compilation_unit) @root {
+  node @root.defs
+  node @root.exports
+  node @root.lexical_defs
+  node @root.lexical_scope
+  node @root.type_scope
+  node @root.namespace_scope
+  
+  ; Connect source file to global scope
+  edge @root.lexical_scope -> SCOPE_ROOT
+  edge @root.lexical_scope -> @root.defs
+}
+
+;; Library Definition
+;; ^^^^^^^^^^^^^^^^
+
+(library_definition
+  name: (dotted_identifier) @name) @library {
+  node @library.defs
+  node @library.exports
+  node @library.lexical_scope
+  
+  ; Define the library
+  attr (@name.def) node_definition = @name
+  attr (@name.def) definiens_node = @library
+  attr (@name.def) syntax_type = "library"
+  
+  ; Connect library to parent scope
+  edge @library.lexical_scope -> @library.before_scope
+  edge @library.lexical_scope -> @library.defs
+  
+  ; Connect the library definition
+  edge @library.after_scope -> @name.def
+  
+  ; Libraries are exported
+  attr (@name.def) is_exported
+}
+
+;; Part Directive
+;; ^^^^^^^^^^^^^
+
+(part_directive
+  path: (string_literal) @path) @part {
+  node @part.defs
+  node part_def
+  
+  ; Extract file path from the string literal
+  let file_path = (source-text @path)
+  ; Remove quotes
+  let clean_path = (replace file_path "\"" "")
+  let clean_path = (replace clean_path "'" "")
+  
+  ; Define the part relation
+  attr (part_def) pop_symbol = clean_path, is_definition, source_node = @part
+  attr (part_def) syntax_type = "part"
+  
+  ; Connect part to parent scope
+  edge @part.after_scope -> part_def
+}
+
+;; Part Of Directive
+;; ^^^^^^^^^^^^^^^
+
+(part_of_directive
+  name: (dotted_identifier) @name) @part_of {
+  node @part_of.defs
+  
+  ; Define the part_of relation
+  attr (@name.def) node_definition = @name
+  attr (@name.def) syntax_type = "part_of"
+  
+  ; Connect part_of to parent scope
+  edge @part_of.after_scope -> @name.def
+}
+
+;; Import Directive
+;; ^^^^^^^^^^^^^^
+
+(import_directive
+  path: (string_literal) @path
+  configuration: (configuration_uri)? @config
+  as: (identifier)? @alias) @import {
+  node @import.defs
+  node import_def
+  
+  ; Extract file path from the string literal
+  let file_path = (source-text @path)
+  ; Remove quotes
+  let clean_path = (replace file_path "\"" "")
+  let clean_path = (replace clean_path "'" "")
+  
+  ; Define the import
+  attr (import_def) pop_symbol = clean_path, is_definition, source_node = @import
+  attr (import_def) syntax_type = "import"
+  
+  ; Connect import to parent scope
+  edge @import.after_scope -> import_def
+  
+  ; If there's an alias, use it for the imported library
+  if present @alias {
+    node alias_def
+    attr (alias_def) node_definition = @alias
+    attr (alias_def) syntax_type = "import_alias"
+    
+    edge import_def -> alias_def
+  }
+}
+
+;; Export Directive
+;; ^^^^^^^^^^^^^^
+
+(export_directive
+  path: (string_literal) @path) @export {
+  node @export.defs
+  node export_def
+  
+  ; Extract file path from the string literal
+  let file_path = (source-text @path)
+  ; Remove quotes
+  let clean_path = (replace file_path "\"" "")
+  let clean_path = (replace clean_path "'" "")
+  
+  ; Define the export
+  attr (export_def) pop_symbol = clean_path, is_definition, source_node = @export
+  attr (export_def) syntax_type = "export"
+  
+  ; Connect export to parent scope
+  edge @export.after_scope -> export_def
+}
+
+;; Class Definitions
+;; ^^^^^^^^^^^^^^^
+
+(class_definition
+  name: (identifier) @name
+  superclass: (superclass_clause)? @extends
+  interfaces: (interfaces_clause)? @implements
+  mixins: (mixins_clause)? @mixins
+  body: (class_body) @body) @class {
+  node @class.defs
+  node @class.exports
+  node @class.lexical_scope
+  node @class.type_scope
+  node @class.drop_scope
+  
+  ; Define the class
+  attr (@name.def) node_definition = @name
+  attr (@name.def) definiens_node = @class
+  attr (@name.def) syntax_type = "class"
+  
+  ; Connect class to parent scope
+  edge @class.lexical_scope -> @class.before_scope
+  edge @class.lexical_scope -> @class.defs
+  
+  ; Connect the class definition
+  edge @class.after_scope -> @name.def
+  
+  ; Connect to superclass if present
+  if present @extends {
+    node extends_node
+    attr (extends_node) type = "push_extends"
+    edge extends_node -> @extends.ref
+    edge @name.def -> extends_node
+  }
+  
+  ; Connect to implemented interfaces if present
+  if present @implements {
+    node implements_node
+    attr (implements_node) type = "push_implements"
+    edge implements_node -> @implements.ref
+    edge @name.def -> implements_node
+  }
+  
+  ; Connect to mixins if present
+  if present @mixins {
+    node mixins_node
+    attr (mixins_node) type = "push_mixins"
+    edge mixins_node -> @mixins.ref
+    edge @name.def -> mixins_node
+  }
+  
+  ; Connect class body to class definition
+  edge @body.before_scope -> @class.lexical_scope
+  
+  ; Handle class scope
+  edge @class.drop_scope -> @class.bottom
+  attr (@class.drop_scope) type = "drop_scopes"
+  
+  ; Classes are exported
+  attr (@name.def) is_exported
+}
+
+;; Abstract Class Definitions
+;; ^^^^^^^^^^^^^^^^^^^^^^^^
+
+(abstract_class_definition
+  name: (identifier) @name
+  superclass: (superclass_clause)? @extends
+  interfaces: (interfaces_clause)? @implements
+  mixins: (mixins_clause)? @mixins
+  body: (class_body) @body) @abstract_class {
+  node @abstract_class.defs
+  node @abstract_class.exports
+  node @abstract_class.lexical_scope
+  node @abstract_class.type_scope
+  node @abstract_class.drop_scope
+  
+  ; Define the abstract class
+  attr (@name.def) node_definition = @name
+  attr (@name.def) definiens_node = @abstract_class
+  attr (@name.def) syntax_type = "abstract_class"
+  
+  ; Connect abstract class to parent scope
+  edge @abstract_class.lexical_scope -> @abstract_class.before_scope
+  edge @abstract_class.lexical_scope -> @abstract_class.defs
+  
+  ; Connect the abstract class definition
+  edge @abstract_class.after_scope -> @name.def
+  
+  ; Connect to superclass if present
+  if present @extends {
+    node extends_node
+    attr (extends_node) type = "push_extends"
+    edge extends_node -> @extends.ref
+    edge @name.def -> extends_node
+  }
+  
+  ; Connect to implemented interfaces if present
+  if present @implements {
+    node implements_node
+    attr (implements_node) type = "push_implements"
+    edge implements_node -> @implements.ref
+    edge @name.def -> implements_node
+  }
+  
+  ; Connect to mixins if present
+  if present @mixins {
+    node mixins_node
+    attr (mixins_node) type = "push_mixins"
+    edge mixins_node -> @mixins.ref
+    edge @name.def -> mixins_node
+  }
+  
+  ; Connect class body to class definition
+  edge @body.before_scope -> @abstract_class.lexical_scope
+  
+  ; Handle class scope
+  edge @abstract_class.drop_scope -> @abstract_class.bottom
+  attr (@abstract_class.drop_scope) type = "drop_scopes"
+  
+  ; Abstract classes are exported
+  attr (@name.def) is_exported
+}
+
+;; Interface Definitions
+;; ^^^^^^^^^^^^^^^^^^^
+
+(interface_definition
+  name: (identifier) @name
+  interfaces: (interfaces_clause)? @implements
+  body: (class_body) @body) @interface {
+  node @interface.defs
+  node @interface.exports
+  node @interface.lexical_scope
+  node @interface.type_scope
+  node @interface.drop_scope
+  
+  ; Define the interface
+  attr (@name.def) node_definition = @name
+  attr (@name.def) definiens_node = @interface
+  attr (@name.def) syntax_type = "interface"
+  
+  ; Connect interface to parent scope
+  edge @interface.lexical_scope -> @interface.before_scope
+  edge @interface.lexical_scope -> @interface.defs
+  
+  ; Connect the interface definition
+  edge @interface.after_scope -> @name.def
+  
+  ; Connect to implemented interfaces if present
+  if present @implements {
+    node implements_node
+    attr (implements_node) type = "push_implements"
+    edge implements_node -> @implements.ref
+    edge @name.def -> implements_node
+  }
+  
+  ; Connect interface body to interface definition
+  edge @body.before_scope -> @interface.lexical_scope
+  
+  ; Handle interface scope
+  edge @interface.drop_scope -> @interface.bottom
+  attr (@interface.drop_scope) type = "drop_scopes"
+  
+  ; Interfaces are exported
+  attr (@name.def) is_exported
+}
+
+;; Mixin Definitions
+;; ^^^^^^^^^^^^^^^
+
+(mixin_definition
+  name: (identifier) @name
+  superclass: (superclass_clause)? @extends
+  interfaces: (interfaces_clause)? @implements
+  body: (class_body) @body) @mixin {
+  node @mixin.defs
+  node @mixin.exports
+  node @mixin.lexical_scope
+  node @mixin.type_scope
+  node @mixin.drop_scope
+  
+  ; Define the mixin
+  attr (@name.def) node_definition = @name
+  attr (@name.def) definiens_node = @mixin
+  attr (@name.def) syntax_type = "mixin"
+  
+  ; Connect mixin to parent scope
+  edge @mixin.lexical_scope -> @mixin.before_scope
+  edge @mixin.lexical_scope -> @mixin.defs
+  
+  ; Connect the mixin definition
+  edge @mixin.after_scope -> @name.def
+  
+  ; Connect to superclass if present
+  if present @extends {
+    node extends_node
+    attr (extends_node) type = "push_extends"
+    edge extends_node -> @extends.ref
+    edge @name.def -> extends_node
+  }
+  
+  ; Connect to implemented interfaces if present
+  if present @implements {
+    node implements_node
+    attr (implements_node) type = "push_implements"
+    edge implements_node -> @implements.ref
+    edge @name.def -> implements_node
+  }
+  
+  ; Connect mixin body to mixin definition
+  edge @body.before_scope -> @mixin.lexical_scope
+  
+  ; Handle mixin scope
+  edge @mixin.drop_scope -> @mixin.bottom
+  attr (@mixin.drop_scope) type = "drop_scopes"
+  
+  ; Mixins are exported
+  attr (@name.def) is_exported
+}
+
+;; Enum Definitions
+;; ^^^^^^^^^^^^^
+
+(enum_definition
+  name: (identifier) @name
+  body: (enum_body) @body) @enum {
+  node @enum.defs
+  node @enum.exports
+  node @enum.lexical_scope
+  node @enum.type_scope
+  node @enum.drop_scope
+  
+  ; Define the enum
+  attr (@name.def) node_definition = @name
+  attr (@name.def) definiens_node = @enum
+  attr (@name.def) syntax_type = "enum"
+  
+  ; Connect enum to parent scope
+  edge @enum.lexical_scope -> @enum.before_scope
+  edge @enum.lexical_scope -> @enum.defs
+  
+  ; Connect the enum definition
+  edge @enum.after_scope -> @name.def
+  
+  ; Connect enum body to enum definition
+  edge @body.before_scope -> @enum.lexical_scope
+  
+  ; Handle enum scope
+  edge @enum.drop_scope -> @enum.bottom
+  attr (@enum.drop_scope) type = "drop_scopes"
+  
+  ; Enums are exported
+  attr (@name.def) is_exported
+}
+
+;; Enum Value Definitions
+;; ^^^^^^^^^^^^^^^^^^^^
+
+(enum_constant
+  name: (identifier) @name) @enum_value {
+  ; Define the enum value
+  attr (@name.def) node_definition = @name
+  attr (@name.def) definiens_node = @enum_value
+  attr (@name.def) syntax_type = "enum_value"
+  
+  ; Connect enum value to parent enum
+  edge @enum_value.after_scope -> @name.def
+  
+  ; Enum values are exported
+  attr (@name.def) is_exported
+}
+
+;; Extension Type Definitions
+;; ^^^^^^^^^^^^^^^^^^^^^^^^
+
+(extension_type_definition
+  name: (identifier) @name
+  representation: (extension_type_representation) @representation
+  body: (class_body) @body) @extension_type {
+  node @extension_type.defs
+  node @extension_type.exports
+  node @extension_type.lexical_scope
+  node @extension_type.type_scope
+  node @extension_type.drop_scope
+  
+  ; Define the extension type
+  attr (@name.def) node_definition = @name
+  attr (@name.def) definiens_node = @extension_type
+  attr (@name.def) syntax_type = "extension_type"
+  
+  ; Connect extension type to parent scope
+  edge @extension_type.lexical_scope -> @extension_type.before_scope
+  edge @extension_type.lexical_scope -> @extension_type.defs
+  
+  ; Connect the extension type definition
+  edge @extension_type.after_scope -> @name.def
+  
+  ; Connect extension type body to extension type definition
+  edge @body.before_scope -> @extension_type.lexical_scope
+  
+  ; Handle extension type scope
+  edge @extension_type.drop_scope -> @extension_type.bottom
+  attr (@extension_type.drop_scope) type = "drop_scopes"
+  
+  ; Extension types are exported
+  attr (@name.def) is_exported
+}
+
+;; Extension Definitions
+;; ^^^^^^^^^^^^^^^^^^^
+
+(extension_declaration
+  name: (identifier)? @name
+  extended_type: (type_identifier) @extended_type
+  body: (class_body) @body) @extension {
+  node @extension.defs
+  node @extension.exports
+  node @extension.lexical_scope
+  node @extension.drop_scope
+  
+  ; Define the extension if it has a name
+  if present @name {
+    attr (@name.def) node_definition = @name
+    attr (@name.def) definiens_node = @extension
+    attr (@name.def) syntax_type = "extension"
+    
+    ; Connect the extension definition
+    edge @extension.after_scope -> @name.def
+    
+    ; Extensions are exported
+    attr (@name.def) is_exported
+  }
+  
+  ; Connect extension to parent scope
+  edge @extension.lexical_scope -> @extension.before_scope
+  edge @extension.lexical_scope -> @extension.defs
+  
+  ; Connect extension to extended type
+  edge @extension.after_scope -> @extended_type.ref
+  
+  ; Connect extension body to extension definition
+  edge @body.before_scope -> @extension.lexical_scope
+  
+  ; Handle extension scope
+  edge @extension.drop_scope -> @extension.bottom
+  attr (@extension.drop_scope) type = "drop_scopes"
+}
+
+;; Method Definitions
+;; ^^^^^^^^^^^^^^^^
+
+(method_definition
+  name: (identifier) @name
+  parameters: (formal_parameter_list) @params
+  body: (function_body) @body) @method {
+  node @method.defs
+  node @method.exports
+  node @method.lexical_scope
+  node @method.call
+  node @method.return_value
+  node @method.drop_scope
+  
+  ; Define the method
+  attr (@name.def) node_definition = @name
+  attr (@name.def) definiens_node = @method
+  attr (@name.def) syntax_type = "method"
+  
+  ; Connect method to parent scope
+  edge @method.lexical_scope -> @method.before_scope
+  edge @method.lexical_scope -> @method.defs
+  
+  ; Connect the method definition
+  edge @method.after_scope -> @name.def
+  edge @name.def -> @method.call
+  
+  ; Connect the method body and parameters
+  edge @params.before_scope -> @method.lexical_scope
+  edge @body.before_scope -> @params.after_scope
+  
+  ; Connect method calls
+  edge @method.call -> @method.return_value
+  edge @method.drop_scope -> @method.bottom
+  
+  ; Set node attributes
+  attr (@method.call) pop_scoped_symbol = "()"
+  attr (@method.drop_scope) type = "drop_scopes"
+  attr (@method.return_value) is_exported
+}
+
+;; Getter Definitions
+;; ^^^^^^^^^^^^^^^^
+
+(getter_signature
+  name: (identifier) @name
+  body: (function_body)? @body) @getter {
+  node @getter.defs
+  node @getter.exports
+  node @getter.lexical_scope
+  node @getter.call
+  node @getter.return_value
+  node @getter.drop_scope
+  
+  ; Define the getter
+  attr (@name.def) node_definition = @name
+  attr (@name.def) definiens_node = @getter
+  attr (@name.def) syntax_type = "getter"
+  
+  ; Connect getter to parent scope
+  edge @getter.lexical_scope -> @getter.before_scope
+  edge @getter.lexical_scope -> @getter.defs
+  
+  ; Connect the getter definition
+  edge @getter.after_scope -> @name.def
+  edge @name.def -> @getter.call
+  
+  ; Connect getter body if present
+  if present @body {
+    edge @body.before_scope -> @getter.lexical_scope
+  }
+  
+  ; Connect getter calls
+  edge @getter.call -> @getter.return_value
+  edge @getter.drop_scope -> @getter.bottom
+  
+  ; Set node attributes
+  attr (@getter.drop_scope) type = "drop_scopes"
+  attr (@getter.return_value) is_exported
+}
+
+;; Setter Definitions
+;; ^^^^^^^^^^^^^^^^
+
+(setter_signature
+  name: (identifier) @name
+  parameter: (formal_parameter) @param
+  body: (function_body)? @body) @setter {
+  node @setter.defs
+  node @setter.exports
+  node @setter.lexical_scope
+  node @setter.call
+  node @setter.return_value
+  node @setter.drop_scope
+  
+  ; Define the setter
+  attr (@name.def) node_definition = @name
+  attr (@name.def) definiens_node = @setter
+  attr (@name.def) syntax_type = "setter"
+  
+  ; Connect setter to parent scope
+  edge @setter.lexical_scope -> @setter.before_scope
+  edge @setter.lexical_scope -> @setter.defs
+  
+  ; Connect the setter definition
+  edge @setter.after_scope -> @name.def
+  edge @name.def -> @setter.call
+  
+  ; Connect the setter parameter
+  edge @param.before_scope -> @setter.lexical_scope
+  
+  ; Connect setter body if present
+  if present @body {
+    edge @body.before_scope -> @param.after_scope
+  }
+  
+  ; Connect setter calls
+  edge @setter.call -> @setter.return_value
+  edge @setter.drop_scope -> @setter.bottom
+  
+  ; Set node attributes
+  attr (@setter.drop_scope) type = "drop_scopes"
+  attr (@setter.return_value) is_exported
+}
+
+;; Constructor Definitions
+;; ^^^^^^^^^^^^^^^^^^^^^
+
+(constructor_signature
+  name: (identifier)? @name
+  parameters: (formal_parameter_list) @params
+  body: (function_body) @body) @constructor {
+  node @constructor.defs
+  node @constructor.exports
+  node @constructor.lexical_scope
+  node @constructor.call
+  node @constructor.return_value
+  node @constructor.drop_scope
+  
+  ; Define the constructor with its name or the class name
+  if present @name {
+    attr (@name.def) node_definition = @name
+    attr (@name.def) definiens_node = @constructor
+    attr (@name.def) syntax_type = "constructor"
+    
+    ; Connect the constructor definition
+    edge @constructor.after_scope -> @name.def
+    edge @name.def -> @constructor.call
+  }
+  
+  ; Connect constructor to parent scope
+  edge @constructor.lexical_scope -> @constructor.before_scope
+  edge @constructor.lexical_scope -> @constructor.defs
+  
+  ; Connect the constructor body and parameters
+  edge @params.before_scope -> @constructor.lexical_scope
+  edge @body.before_scope -> @params.after_scope
+  
+  ; Connect constructor calls
+  edge @constructor.call -> @constructor.return_value
+  edge @constructor.drop_scope -> @constructor.bottom
+  
+  ; Set node attributes
+  attr (@constructor.call) pop_scoped_symbol = "()"
+  attr (@constructor.drop_scope) type = "drop_scopes"
+}
+
+;; Field Definitions
+;; ^^^^^^^^^^^^^^^
+
+(field_declaration
+  name: (identifier) @name
+  initializer: (_)? @initializer) @field {
+  ; Define the field
+  attr (@name.def) node_definition = @name
+  attr (@name.def) definiens_node = @field
+  attr (@name.def) syntax_type = "field"
+  
+  ; Connect field to parent scope
+  edge @field.after_scope -> @name.def
+  
+  ; Connect initializer if present
+  if present @initializer {
+    edge @initializer.before_scope -> @field.before_scope
+  }
+}
+
+;; Function Definitions
+;; ^^^^^^^^^^^^^^^^^
+
+(function_signature
+  name: (identifier) @name
+  parameters: (formal_parameter_list) @params
+  body: (function_body) @body) @function {
+  node @function.defs
+  node @function.exports
+  node @function.lexical_scope
+  node @function.call
+  node @function.return_value
+  node @function.drop_scope
+  
+  ; Define the function
+  attr (@name.def) node_definition = @name
+  attr (@name.def) definiens_node = @function
+  attr (@name.def) syntax_type = "function"
+  
+  ; Connect function to parent scope
+  edge @function.lexical_scope -> @function.before_scope
+  edge @function.lexical_scope -> @function.defs
+  
+  ; Connect the function definition
+  edge @function.after_scope -> @name.def
+  edge @name.def -> @function.call
+  
+  ; Connect the function body and parameters
+  edge @params.before_scope -> @function.lexical_scope
+  edge @body.before_scope -> @params.after_scope
+  
+  ; Connect function calls
+  edge @function.call -> @function.return_value
+  edge @function.drop_scope -> @function.bottom
+  
+  ; Set node attributes
+  attr (@function.call) pop_scoped_symbol = "()"
+  attr (@function.drop_scope) type = "drop_scopes"
+  attr (@function.return_value) is_exported
+}
+
+;; Top-level Variable Declarations
+;; ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+(top_level_variable_declaration
+  (variable_declaration
+    (initialized_variable_definition
+      name: (identifier) @name
+      value: (_)? @value))) @var {
+  node @var.defs
+  
+  ; Define the variable
+  attr (@name.def) node_definition = @name
+  attr (@name.def) definiens_node = @var
+  attr (@name.def) syntax_type = "variable"
+  
+  ; Connect variable to parent scope
+  edge @var.after_scope -> @name.def
+  
+  ; Connect value if present
+  if present @value {
+    edge @value.before_scope -> @var.before_scope
+  }
+  
+  ; Top-level variables are exported
+  attr (@name.def) is_exported
+}
+
+;; Type Alias Definitions
+;; ^^^^^^^^^^^^^^^^^^^^
+
+(type_alias
+  name: (identifier) @name
+  type: (_) @type) @type_alias {
+  node @type_alias.defs
+  
+  ; Define the type alias
+  attr (@name.def) node_definition = @name
+  attr (@name.def) definiens_node = @type_alias
+  attr (@name.def) syntax_type = "type_alias"
+  
+  ; Connect type alias to parent scope
+  edge @type_alias.after_scope -> @name.def
+  
+  ; Connect type to type alias
+  edge @type.before_scope -> @type_alias.before_scope
+  
+  ; Type aliases are exported
+  attr (@name.def) is_exported
+}
+
+;; Function Parameters
+;; ^^^^^^^^^^^^^^^^^
+
+(formal_parameter_list) @params {
+  node @params.before_scope
+  node @params.after_scope
+}
+
+(formal_parameter
+  name: (identifier) @name) @param {
+  ; Define the parameter
+  attr (@name.def) node_definition = @name
+  attr (@name.def) definiens_node = @param
+  attr (@name.def) syntax_type = "parameter"
+  
+  ; Connect parameter to params list
+  edge @params.after_scope -> @name.def
+}
+
+(optional_formal_parameter
+  name: (identifier) @name) @param {
+  ; Define the optional parameter
+  attr (@name.def) node_definition = @name
+  attr (@name.def) definiens_node = @param
+  attr (@name.def) syntax_type = "parameter"
+  
+  ; Connect parameter to params list
+  edge @params.after_scope -> @name.def
+}
+
+;; Local Variable Declarations
+;; ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+(variable_declaration
+  (initialized_variable_definition
+    name: (identifier) @name
+    value: (_)? @value)) @local_var {
+  node @local_var.defs
+  
+  ; Define the local variable
+  attr (@name.def) node_definition = @name
+  attr (@name.def) definiens_node = @local_var
+  attr (@name.def) syntax_type = "local_variable"
+  
+  ; Connect local variable to parent scope
+  edge @local_var.after_scope -> @name.def
+  
+  ; Connect value if present
+  if present @value {
+    edge @value.before_scope -> @local_var.before_scope
+  }
+}
+
+;; Method Invocation
+;; ^^^^^^^^^^^^^^^
+
+(method_invocation
+  object: (_) @object
+  name: (identifier) @name
+  arguments: (arguments) @args) @method_call {
+  node @method_call.ref
+  node @method_call.args
+  
+  ; Reference the method
+  attr (@method_call.ref) node_reference = @name
+  
+  ; Connect method call to object and arguments
+  edge @method_call.ref -> @object.ref
+  edge @args.before_scope -> @method_call.before_scope
+}
+
+;; Cascade Method Invocation
+;; ^^^^^^^^^^^^^^^^^^^^^^^
+
+(cascade_section
+  (method_invocation 
+    name: (identifier) @name
+    arguments: (arguments) @args)) @cascade {
+  node @cascade.ref
+  
+  ; Reference the method
+  attr (@cascade.ref) node_reference = @name
+  
+  ; Connect arguments to cascade
+  edge @args.before_scope -> @cascade.before_scope
+}
+
+;; Function Invocation
+;; ^^^^^^^^^^^^^^^^^
+
+(function_expression_invocation
+  function: (_) @func
+  arguments: (arguments) @args) @function_call {
+  node @function_call.ref
+  
+  ; Reference the function
+  attr (@function_call.ref) node_reference = @func
+  
+  ; Connect arguments to function call
+  edge @args.before_scope -> @function_call.before_scope
+}
+
+;; Property Access
+;; ^^^^^^^^^^^^^
+
+(property_access
+  object: (_) @object
+  property: (identifier) @property) @prop_access {
+  node @prop_access.ref
+  
+  ; Reference the property
+  attr (@prop_access.ref) node_reference = @property
+  
+  ; Connect property access to object
+  edge @prop_access.ref -> @object.ref
+}
+
+;; Cascade Property Access
+;; ^^^^^^^^^^^^^^^^^^^^^
+
+(cascade_section
+  (property_access 
+    property: (identifier) @property)) @cascade_prop {
+  node @cascade_prop.ref
+  
+  ; Reference the property
+  attr (@cascade_prop.ref) node_reference = @property
+}
+
+;; Reference to Identifier
+;; ^^^^^^^^^^^^^^^^^^^^^
+
+(identifier) @id {
+  node @id.ref
+  node @id.def
+  
+  ; Reference the identifier
+  attr (@id.ref) node_reference = @id
+  
+  ; Connect reference to scope
+  edge @id.ref -> @id.before_scope
+}
+
+;; Reference to Type
+;; ^^^^^^^^^^^^^^^
+
+(type_identifier) @type {
+  node @type.ref
+  node @type.def
+  
+  ; Reference the type
+  attr (@type.ref) node_reference = @type
+  
+  ; Connect type reference to scope
+  edge @type.ref -> @type.before_scope
+}
+
+;; Block Structure
+;; ^^^^^^^^^^^^^
+
+(block) @block {
+  node @block.before_scope
+  node @block.after_scope
+  node @block.defs
+  
+  ; Connect block to parent scope and its own scope
+  edge @block.before_scope -> @block.defs
+}
+
+(block (_) @stmt .) @block {
+  ; Connect first statement to block
+  edge @block.after_scope -> @stmt.after_scope
+}
+
+(block (_) @stmt1 . (_) @stmt2) {
+  ; Connect statements in sequence
+  edge @stmt2.before_scope -> @stmt1.after_scope
+}
+
+(block . (_) @stmt) @block {
+  ; Connect block to its first statement
+  edge @stmt.before_scope -> @block.before_scope
+}
+
+;; Function Body
+;; ^^^^^^^^^^^^
+
+(function_body) @body {
+  node @body.before_scope
+  node @body.after_scope
+  node @body.defs
+  
+  ; Connect function body to parent scope and its own scope
+  edge @body.before_scope -> @body.defs
+}
+
+;; Arrow Function Body
+;; ^^^^^^^^^^^^^^^^^
+
+(arrow_function_expression
+  parameters: (formal_parameter_list) @params
+  body: (_) @body) @arrow_function {
+  node @arrow_function.defs
+  node @arrow_function.lexical_scope
+  node @arrow_function.drop_scope
+  
+  ; Connect arrow function to parent scope
+  edge @arrow_function.lexical_scope -> @arrow_function.before_scope
+  edge @arrow_function.lexical_scope -> @arrow_function.defs
+  
+  ; Connect the parameters and body
+  edge @params.before_scope -> @arrow_function.lexical_scope
+  edge @body.before_scope -> @params.after_scope
+  
+  ; Handle closure scope
+  edge @arrow_function.drop_scope -> @arrow_function.bottom
+  attr (@arrow_function.drop_scope) type = "drop_scopes"
+}
+
+;; The End
+;; ^^^^^^

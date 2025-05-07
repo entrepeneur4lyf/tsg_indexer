@@ -1,0 +1,67 @@
+[package]
+name = "tsg_indexer"
+version = "0.1.0"
+edition = "2024"
+description = "A library for indexing code repositories using Tree-sitter Stack Graphs"
+authors = ["Shawn McAllister <founder@engineered4ai.com>"]
+license = "MIT OR Apache-2.0"
+readme = "README.md"
+repository = "https://github.com/entrepeneur4lyf/tsg_indexer"
+keywords = ["tree-sitter", "stack-graphs", "code-analysis", "indexer"]
+categories = ["development-tools"]
+
+# Feature definitions for consumers (like MCP servers)
+[features]
+default = []  # No default features
+cli = ["tree-sitter-stack-graphs/cli", "clap"]
+lsp = ["tree-sitter-stack-graphs/lsp"]
+
+[dependencies]
+# Core dependencies
+tree-sitter-stack-graphs = { version = "^0.10" }
+stack-graphs = "0.14.1"
+tree-sitter = "^0.24"
+streaming-iterator = "0.1.9"
+tree-sitter-rust = "^0.23"
+tree-sitter-python = "^0.23"
+tree-sitter-javascript = "^0.23"
+tree-sitter-typescript = "^0.23"
+tree-sitter-java = "^0.23"
+tree-sitter-swift = "^0.7"
+tree-sitter-objc = "^3.0"
+tree-sitter-css = "^0.23"
+tree-sitter-scala = "^0.23"
+tree-sitter-zig = "^1.1"
+tree-sitter-yaml = "^0.7"
+tree-sitter-go = "^0.23"
+tree-sitter-php = "^0.23"
+tree-sitter-xml = "^0.7"
+tree-sitter-jsdoc = "^0.23"
+tree-sitter-bash = "^0.23"
+tree-sitter-json = "^0.24"
+tree-sitter-html = "^0.23"
+tree-sitter-regex = "^0.24"
+tree-sitter-c-sharp = "^0.23"
+tree-sitter-ruby = "^0.23"
+tree-sitter-md = "^0.3"
+tree-sitter-lua = "^0.2"
+tree-sitter-dart = "0.0.4"
+rust-sitter = "^0.4"
+
+
+anyhow = "1.0.81"
+serde = { version = "1.0.197", features = ["derive"] }
+serde_json = "1.0.126"
+log = "0.4.21"
+walkdir = "2.3.3"
+
+# Optional dependencies
+clap = { version = "4.5.6", features = ["derive"], optional = true }
+env_logger = "0.11.3"  # Keeping this as a non-optional dependency for basic logging
+
+
+[lib]
+name = "tsg_indexer"
+path = "src/lib.rs"
+
+

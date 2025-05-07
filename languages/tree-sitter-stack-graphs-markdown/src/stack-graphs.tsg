@@ -1,0 +1,475 @@
+// Tree-sitter Stack Graphs definition for Markdown
+// This file defines how Markdown constructs are mapped to stack graph nodes and edges.
+
+// Attribute Shorthands
+attribute node_definition = node        => type = "pop_symbol", node_symbol = node, is_definition
+attribute node_reference = node         => type = "push_symbol", node_symbol = node, is_reference
+attribute pop_node = node               => type = "pop_symbol", node_symbol = node
+attribute pop_scoped_node = node        => type = "pop_scoped_symbol", node_symbol = node
+attribute pop_scoped_symbol = symbol    => type = "pop_scoped_symbol", symbol = symbol
+attribute pop_symbol = symbol           => type = "pop_symbol", symbol = symbol
+attribute push_node = node              => type = "push_symbol", node_symbol = node
+attribute push_scoped_node = node       => type = "push_scoped_symbol", node_symbol = node
+attribute push_scoped_symbol = symbol   => type = "push_scoped_symbol", symbol = symbol
+attribute push_symbol = symbol          => type = "push_symbol", symbol = symbol
+attribute scoped_node_definition = node => type = "pop_scoped_symbol", node_symbol = node, is_definition
+attribute scoped_node_reference = node  => type = "push_scoped_symbol", node_symbol = node, is_reference
+attribute symbol_definition = symbol    => type = "pop_symbol", symbol = symbol, is_definition
+attribute symbol_reference = symbol     => type = "push_symbol", symbol = symbol, is_reference
+
+attribute node_symbol = node            => symbol = (source-text node), source_node = node
+
+// Global Variables
+global JUMP_TO_SCOPE_NODE
+global ROOT_NODE
+global SCOPE_ROOT
+
+// Document Nodes
+(document)@doc {
+  node @doc.defs
+  node @doc.exports
+  node @doc.lexical_defs
+  node @doc.lexical_scope
+  node @doc.headings
+  node @doc.links
+  node @doc.footnotes
+  node drop_scope
+  
+  // Establish document scope connections
+  edge @doc.lexical_scope -> @doc.defs
+  edge @doc.lexical_scope -> SCOPE_ROOT
+  
+  // Set up scoping
+  edge drop_scope -> @doc.bottom
+  attr (drop_scope) type = "drop_scopes"
+}
+
+// Propagate scope from document to elements
+(document (_)@node)@doc {
+  // Propagate lexical scope
+  edge @node.lexical_scope -> @doc.lexical_scope
+}
+
+// Define nodes for various markdown elements
+[
+  (paragraph)
+  (heading)
+  (atx_heading)
+  (setext_heading)
+  (block_quote)
+  (list)
+  (list_item)
+  (task_list_item)
+  (table)
+  (fenced_code_block)
+  (indented_code_block)
+  (html_block)
+  (link_definition)
+  (footnote_definition)
+  (thematic_break)
+]@elem {
+  node @elem.lexical_scope
+  node @elem.after_scope
+}
+
+// Headers - define sections that can be referenced (ATX style)
+(atx_heading
+  (atx_heading_marker)
+  (inline) @header_text) @heading {
+  // Define header text
+  attr (@header_text.def) node_definition = @header_text
+  attr (@header_text.def) definiens_node = @heading
+  attr (@header_text.def) syntax_type = "heading"
+  attr (@header_text.def) is_exported
+  
+  // Connect header definition
+  edge @heading.after_scope -> @header_text.def
+  
+  // Add to document headings for navigation
+  edge @doc.headings -> @header_text.def
+  
+  // Make heading accessible from document scope
+  edge @doc.defs -> @header_text.def
+  
+  // Create anchor for header
+  node header_anchor
+  attr (header_anchor) symbol = (replace (source-text @header_text) "[^a-zA-Z0-9-]" "-")
+  attr (header_anchor) source_node = @header_text
+  edge @header_text.def -> header_anchor
+  
+  // Store heading level for structure
+  node heading_level
+  attr (heading_level) symbol = (count-prefix (source-text (preceding-sibling @header_text)) "#")
+  attr (heading_level) source_node = @heading
+  edge @header_text.def -> heading_level
+}
+
+// Setext headings (underlined headers)
+(setext_heading
+  (paragraph) @header_text) @heading {
+  // Define header text
+  attr (@header_text.def) node_definition = @header_text
+  attr (@header_text.def) definiens_node = @heading
+  attr (@header_text.def) syntax_type = "heading"
+  attr (@header_text.def) is_exported
+  
+  // Connect header definition
+  edge @heading.after_scope -> @header_text.def
+  
+  // Add to document headings for navigation
+  edge @doc.headings -> @header_text.def
+  
+  // Make heading accessible from document scope
+  edge @doc.defs -> @header_text.def
+  
+  // Create anchor for header
+  node header_anchor
+  attr (header_anchor) symbol = (replace (source-text @header_text) "[^a-zA-Z0-9-]" "-")
+  attr (header_anchor) source_node = @header_text
+  edge @header_text.def -> header_anchor
+  
+  // Determine heading level (1 for =, 2 for -)
+  node heading_level
+  attr (heading_level) symbol = (if (contains (source-text (following-sibling @header_text)) "=") "1" "2")
+  attr (heading_level) source_node = @heading
+  edge @header_text.def -> heading_level
+}
+
+// Link definitions - define links that can be referenced later
+(link_definition
+  (link_label) @label
+  (link_destination) @destination) @link_def {
+  // Define link
+  attr (@label.def) node_definition = @label
+  attr (@label.def) definiens_node = @link_def
+  attr (@label.def) syntax_type = "link_definition"
+  attr (@label.def) is_exported
+  
+  // Connect link definition
+  edge @link_def.after_scope -> @label.def
+  
+  // Make link accessible from document scope
+  edge @doc.links -> @label.def
+  edge @doc.defs -> @label.def
+  
+  // Store destination for reference
+  node link_dest
+  attr (link_dest) symbol = (source-text @destination)
+  attr (link_dest) source_node = @destination
+  edge @label.def -> link_dest
+}
+
+// Link references that use link definitions
+(link_reference
+  (link_label) @label) @link_ref {
+  node @label.ref
+  
+  // Reference link
+  attr (@label.ref) node_reference = @label
+  attr (@label.ref) syntax_type = "link_reference"
+  
+  // Connect reference
+  edge @link_ref.after -> @label.ref
+  
+  // Look up in document scope
+  edge @label.ref -> @doc.lexical_scope
+}
+
+// Inline links (direct links with URL)
+(inline_link
+  (link_text) @text
+  (link_destination) @destination) @link {
+  // Define link text
+  attr (@text.def) node_definition = @text
+  attr (@text.def) definiens_node = @link
+  attr (@text.def) syntax_type = "inline_link"
+  
+  // Connect link text definition
+  edge @link.after_scope -> @text.def
+  
+  // Store destination for reference
+  node link_dest
+  attr (link_dest) symbol = (source-text @destination)
+  attr (link_dest) source_node = @destination
+  edge @text.def -> link_dest
+}
+
+// Image links that reference link definitions
+(image_reference
+  (link_label) @label) @img_ref {
+  node @label.ref
+  
+  // Reference link for image
+  attr (@label.ref) node_reference = @label
+  attr (@label.ref) syntax_type = "image_reference"
+  
+  // Connect reference
+  edge @img_ref.after -> @label.ref
+  
+  // Look up in document scope
+  edge @label.ref -> @doc.lexical_scope
+}
+
+// Inline images (direct links with URL)
+(image
+  (link_text) @text
+  (link_destination) @destination) @image {
+  // Define image text (alt text)
+  attr (@text.def) node_definition = @text
+  attr (@text.def) definiens_node = @image
+  attr (@text.def) syntax_type = "image"
+  
+  // Connect image definition
+  edge @image.after_scope -> @text.def
+  
+  // Store destination for reference
+  node img_dest
+  attr (img_dest) symbol = (source-text @destination)
+  attr (img_dest) source_node = @destination
+  edge @text.def -> img_dest
+}
+
+// Code blocks (fenced) with language specification
+(fenced_code_block
+  (info_string) @language
+  (code_fence_content) @code) @code_block {
+  // Define code block
+  attr (@code.def) node_definition = @code
+  attr (@code.def) definiens_node = @code_block
+  attr (@code.def) syntax_type = "code_block"
+  attr (@language.info) language = @language
+  
+  // Connect code block definition
+  edge @code_block.after_scope -> @code.def
+  
+  // Create language reference
+  node lang_ref
+  attr (lang_ref) symbol = (source-text @language)
+  attr (lang_ref) source_node = @language
+  edge @code.def -> lang_ref
+}
+
+// Indented code blocks
+(indented_code_block) @code_block {
+  // Define indented code block
+  attr (@code_block.def) node_definition = @code_block
+  attr (@code_block.def) definiens_node = @code_block
+  attr (@code_block.def) syntax_type = "indented_code_block"
+  
+  // Connect indented code block definition
+  edge @code_block.after_scope -> @code_block.def
+}
+
+// HTML blocks in Markdown
+(html_block) @html {
+  // Define HTML block
+  attr (@html.def) node_definition = @html
+  attr (@html.def) definiens_node = @html
+  attr (@html.def) syntax_type = "html_block"
+  
+  // Connect HTML block definition
+  edge @html.after_scope -> @html.def
+}
+
+// Blockquotes - with scoping
+(block_quote) @quote {
+  node @quote.after_scope
+  node drop_scope
+  
+  // Define blockquote
+  attr (@quote.def) node_definition = @quote
+  attr (@quote.def) syntax_type = "block_quote"
+  
+  // Connect blockquote definition and set up scope
+  edge @quote.after_scope -> @quote.def
+  edge drop_scope -> @quote.bottom
+  attr (drop_scope) type = "drop_scopes"
+  
+  // Establish blockquote scope
+  edge @quote.lexical_scope -> @doc.lexical_scope
+}
+
+// List items - with scoping
+(list_item) @item {
+  node @item.after_scope
+  node drop_scope
+  
+  // Define list item
+  attr (@item.def) node_definition = @item
+  attr (@item.def) syntax_type = "list_item"
+  
+  // Connect list item definition and set up scope
+  edge @item.after_scope -> @item.def
+  edge drop_scope -> @item.bottom
+  attr (drop_scope) type = "drop_scopes"
+  
+  // Establish list item scope
+  edge @item.lexical_scope -> @doc.lexical_scope
+}
+
+// Table definitions
+(table
+  (pipe_table_header) @header) @table {
+  // Define table
+  attr (@header.def) node_definition = @header
+  attr (@header.def) definiens_node = @table
+  attr (@header.def) syntax_type = "table"
+  
+  // Connect table definition
+  edge @table.after_scope -> @header.def
+  
+  // Create cells array for access
+  node cells_array
+  attr (cells_array) symbol = "cells"
+  attr (cells_array) source_node = @table
+  edge @header.def -> cells_array
+}
+
+// Table cells
+(pipe_table_cell) @cell {
+  // Define cell
+  attr (@cell.def) node_definition = @cell
+  attr (@cell.def) syntax_type = "table_cell"
+  
+  // Connect cell definition to table
+  edge @table.after_scope -> @cell.def
+}
+
+// Task list items
+(task_list_item
+  (task_list_marker) @marker
+  (_) @content) @task {
+  // Define task
+  attr (@task.def) node_definition = @task
+  attr (@task.def) syntax_type = "task_item"
+  attr (@marker.info) checked = @marker
+  
+  // Connect task definition
+  edge @task.after_scope -> @task.def
+  
+  // Create status reference 
+  node task_status
+  attr (task_status) symbol = (if (contains (source-text @marker) "x") "completed" "pending")
+  attr (task_status) source_node = @marker
+  edge @task.def -> task_status
+}
+
+// Footnote definitions
+(footnote_definition
+  (footnote_label) @label) @footnote {
+  // Define footnote
+  attr (@label.def) node_definition = @label
+  attr (@label.def) definiens_node = @footnote
+  attr (@label.def) syntax_type = "footnote_definition"
+  attr (@label.def) is_exported
+  
+  // Connect footnote definition
+  edge @footnote.after_scope -> @label.def
+  
+  // Add to document footnotes
+  edge @doc.footnotes -> @label.def
+  edge @doc.defs -> @label.def
+}
+
+// Footnote references
+(footnote_reference
+  (footnote_label) @label) @footnote_ref {
+  node @label.ref
+  
+  // Reference footnote
+  attr (@label.ref) node_reference = @label
+  attr (@label.ref) syntax_type = "footnote_reference"
+  
+  // Connect reference
+  edge @footnote_ref.after -> @label.ref
+  
+  // Look up in document scope
+  edge @label.ref -> @doc.lexical_scope
+}
+
+// YAML front matter (used for metadata)
+(front_matter
+  (front_matter_content) @yaml) @front_matter {
+  // Define front matter
+  attr (@yaml.def) node_definition = @yaml
+  attr (@yaml.def) definiens_node = @front_matter
+  attr (@yaml.def) syntax_type = "front_matter"
+  attr (@yaml.def) is_exported
+  
+  // Connect front matter definition
+  edge @front_matter.after_scope -> @yaml.def
+  
+  // Add to document metadata
+  edge @doc.defs -> @yaml.def
+}
+
+// Thematic breaks (horizontal rules)
+(thematic_break) @break {
+  // Define thematic break
+  attr (@break.def) node_definition = @break
+  attr (@break.def) syntax_type = "thematic_break"
+  
+  // Connect thematic break definition
+  edge @doc.lexical_defs -> @break.def
+}
+
+// Definition lists
+(definition_list
+  (definition_term) @term
+  (definition_description) @description) @def_list {
+  // Define definition term
+  attr (@term.def) node_definition = @term
+  attr (@term.def) definiens_node = @def_list
+  attr (@term.def) syntax_type = "definition_term"
+  attr (@term.def) is_exported
+  
+  // Connect definition term
+  edge @def_list.after_scope -> @term.def
+  
+  // Add to document definitions
+  edge @doc.defs -> @term.def
+}
+
+// Explicit anchor links (HTML anchors in Markdown)
+(inline
+  (html_inline) @anchor
+  (#match? @anchor "<a\\s+name=[\"'][^\"']+[\"']")) @anchor_def {
+  // Extract anchor name
+  node anchor_name
+  var name = (extract @anchor "name=[\"']([^\"']+)[\"']")
+  attr (anchor_name) symbol = name
+  attr (anchor_name) source_node = @anchor
+  
+  // Define anchor
+  attr (anchor_name.def) node_definition = anchor_name
+  attr (anchor_name.def) definiens_node = @anchor_def
+  attr (anchor_name.def) syntax_type = "anchor"
+  attr (anchor_name.def) is_exported
+  
+  // Connect anchor definition
+  edge @anchor_def.after_scope -> anchor_name.def
+  
+  // Make accessible from document scope
+  edge @doc.defs -> anchor_name.def
+}
+
+// Links to anchors
+(inline_link
+  (link_destination) @dest
+  (#match? @dest "^#")) @anchor_ref {
+  // Extract anchor name without #
+  node anchor_name
+  var name = (replace (source-text @dest) "^#" "")
+  attr (anchor_name) symbol = name
+  attr (anchor_name) source_node = @dest
+  
+  // Reference anchor
+  attr (anchor_name.ref) node_reference = anchor_name
+  attr (anchor_name.ref) syntax_type = "anchor_reference"
+  
+  // Connect reference
+  edge @anchor_ref.after -> anchor_name.ref
+  
+  // Look up in document scope
+  edge anchor_name.ref -> @doc.lexical_scope
+}

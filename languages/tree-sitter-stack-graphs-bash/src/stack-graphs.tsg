@@ -1,0 +1,445 @@
+// Tree-sitter Stack Graphs definition for Bash
+// This file defines how Bash constructs are mapped to stack graph nodes and edges.
+
+// Attribute Shorthands
+attribute node_definition = node        => type = "pop_symbol", node_symbol = node, is_definition
+attribute node_reference = node         => type = "push_symbol", node_symbol = node, is_reference
+attribute pop_node = node               => type = "pop_symbol", node_symbol = node
+attribute pop_scoped_node = node        => type = "pop_scoped_symbol", node_symbol = node
+attribute pop_scoped_symbol = symbol    => type = "pop_scoped_symbol", symbol = symbol
+attribute pop_symbol = symbol           => type = "pop_symbol", symbol = symbol
+attribute push_node = node              => type = "push_symbol", node_symbol = node
+attribute push_scoped_node = node       => type = "push_scoped_symbol", node_symbol = node
+attribute push_scoped_symbol = symbol   => type = "push_scoped_symbol", symbol = symbol
+attribute push_symbol = symbol          => type = "push_symbol", symbol = symbol
+attribute scoped_node_definition = node => type = "pop_scoped_symbol", node_symbol = node, is_definition
+attribute scoped_node_reference = node  => type = "push_scoped_symbol", node_symbol = node, is_reference
+attribute symbol_definition = symbol    => type = "pop_symbol", symbol = symbol, is_definition
+attribute symbol_reference = symbol     => type = "push_symbol", symbol = symbol, is_reference
+
+attribute node_symbol = node            => symbol = (source-text node), source_node = node
+
+// Global Variables
+global JUMP_TO_SCOPE_NODE
+global ROOT_NODE
+global SCOPE_ROOT
+
+// Program Nodes
+(program)@prog {
+  node @prog.defs
+  node @prog.exports
+  node @prog.lexical_defs
+  node @prog.lexical_scope
+  node @prog.var_defs
+  
+  // Establish program scope connections
+  edge @prog.lexical_scope -> @prog.defs
+  edge @prog.lexical_scope -> SCOPE_ROOT
+}
+
+// Propagate scope from program to statements
+(program (_)@stmt)@prog {
+  // Propagate lexical scope
+  edge @stmt.lexical_scope -> @prog.lexical_scope
+  
+  // Expose declarations
+  edge @prog.defs -> @stmt.lexical_defs
+  edge @prog.defs -> @stmt.var_defs
+  
+  // Exports are visible to modules that source this file
+  edge @prog.exports -> @stmt.exports
+}
+
+// Define statement nodes for all statement types
+[
+  (command)
+  (variable_assignment)
+  (function_definition)
+  (if_statement)
+  (for_statement)
+  (while_statement)
+  (case_statement)
+  (pipeline)
+  (subshell)
+  (redirected_statement)
+  (heredoc_body)
+]@stmt {
+  node @stmt.exports
+  node @stmt.lexical_defs
+  node @stmt.lexical_scope
+  node @stmt.var_defs
+}
+
+// Function declarations
+(function_definition
+  name: (word) @name) @function {
+  node @function.after_scope
+  node @function.bottom
+  node @function.call
+  node @function.params.before_scope
+  node return_value
+  node drop_scope
+  
+  // Define function name
+  attr (@name.def) node_definition = @name
+  attr (@name.def) definiens_node = @function
+  attr (@name.def) syntax_type = "function"
+  attr (@name.def) is_exported
+  
+  // Connect function definition nodes
+  edge @function.after_scope -> @name.def
+  edge @name.def -> @function.call
+  edge @function.call -> return_value
+  edge drop_scope -> @function.bottom
+  
+  // Set up scoping
+  attr (drop_scope) type = "drop_scopes"
+  attr (@function.call) pop_scoped_symbol = "()"
+  edge @function.params.before_scope -> JUMP_TO_SCOPE_NODE
+  
+  // Export function definitions to make them available
+  edge @stmt.exports -> @name.def
+  edge @stmt.var_defs -> @name.def
+}
+
+// Function body scope
+(function_definition
+  body: (compound_statement)@body) @function {
+  // Propagate scope
+  edge @body.lexical_scope -> @function.after_scope
+}
+
+// Variable declarations with assignment
+(variable_assignment
+  name: (variable_name) @name) @variable {
+  // Define variable name
+  attr (@name.def) node_definition = @name
+  attr (@name.def) definiens_node = @variable
+  attr (@name.def) syntax_type = "variable"
+  
+  // Connect variable definition nodes
+  edge @variable.after_scope -> @name.def
+  
+  // Make variable available in scope
+  edge @stmt.var_defs -> @name.def
+}
+
+// Exported variables using declare/export
+(declaration_command
+  (variable_assignment
+    name: (variable_name) @name)) @export {
+  // Define exported variable
+  attr (@name.def) node_definition = @name
+  attr (@name.def) definiens_node = @export
+  attr (@name.def) syntax_type = "exported_variable"
+  attr (@name.def) is_exported
+  
+  // Connect export definition nodes
+  edge @export.after_scope -> @name.def
+  
+  // Add to exports and variable definitions
+  edge @stmt.exports -> @name.def
+  edge @stmt.var_defs -> @name.def
+}
+
+// Variable references (simple expansion)
+(simple_expansion
+  (variable_name) @name) @variable_ref {
+  node @variable_ref.ref
+  
+  // Reference variable
+  attr (@variable_ref.ref) node_reference = @name
+  attr (@variable_ref.ref) syntax_type = "variable_reference"
+  
+  // Connect reference node
+  edge @variable_ref.after -> @variable_ref.ref
+  
+  // Scope lookup for variable
+  edge @variable_ref.ref -> @stmt.lexical_scope
+}
+
+// Variable references (parameter expansion)
+(expansion
+  (variable_name) @name) @variable_ref {
+  node @variable_ref.ref
+  
+  // Reference variable
+  attr (@variable_ref.ref) node_reference = @name
+  attr (@variable_ref.ref) syntax_type = "variable_reference"
+  
+  // Connect reference node
+  edge @variable_ref.after -> @variable_ref.ref
+  
+  // Scope lookup for variable
+  edge @variable_ref.ref -> @stmt.lexical_scope
+}
+
+// Command invocations - built-in or external commands
+(command
+  name: (word) @name) @command {
+  node @command.ref
+  node @command.after
+  
+  // Reference command
+  attr (@command.ref) node_reference = @name
+  attr (@command.ref) syntax_type = "command"
+  
+  // Connect reference node
+  edge @command.after -> @command.ref
+  
+  // Scope lookup for command
+  edge @command.ref -> @stmt.lexical_scope
+}
+
+// Shell script imports (source or dot command)
+(command
+  name: (word) @name
+  argument: (word) @path
+  (#match? @name "^(source|\\.)$")) @import {
+  node import_node
+  
+  // Define import path
+  attr (import_node) node_definition = @path
+  attr (import_node) syntax_type = "import"
+  
+  // Connect import node
+  edge @import.after_scope -> import_node
+  
+  // Create reference to the imported file/module
+  node import_ref
+  attr (import_ref) node_reference = @path
+  attr (import_ref) syntax_type = "import_reference"
+  
+  // Connect the reference to the scope
+  edge import_ref -> @stmt.lexical_scope
+  
+  // Add the imported definitions to the current scope
+  edge @stmt.lexical_scope -> import_ref
+}
+
+// Block scopes for compound statements
+(compound_statement) @block {
+  node @block.lexical_scope
+  node @block.var_defs
+  node @block.lexical_defs
+  node drop_scope
+  
+  // Define block scope handling
+  edge @block.lexical_scope -> @stmt.lexical_scope
+  edge drop_scope -> @block.bottom
+  attr (drop_scope) type = "drop_scopes"
+}
+
+// For loops - with variable definition
+(for_statement
+  variable: (variable_name) @name) @for_loop {
+  node @for_loop.after_scope
+  node @for_loop.bottom
+  node drop_scope
+  
+  // Define loop variable
+  attr (@name.def) node_definition = @name
+  attr (@name.def) definiens_node = @for_loop
+  attr (@name.def) syntax_type = "loop_variable"
+  
+  // Connect loop variable definition
+  edge @for_loop.after_scope -> @name.def
+  edge drop_scope -> @for_loop.bottom
+  attr (drop_scope) type = "drop_scopes"
+  
+  // Make loop variable available in scope
+  edge @stmt.var_defs -> @name.def
+}
+
+// While loops - create scoped block
+(while_statement) @while_loop {
+  node @while_loop.after_scope
+  node @while_loop.bottom
+  node drop_scope
+  
+  // Define scope
+  edge drop_scope -> @while_loop.bottom
+  attr (drop_scope) type = "drop_scopes"
+}
+
+// If statements - create scoped block
+(if_statement) @if_statement {
+  node @if_statement.after_scope
+  node @if_statement.bottom
+  node drop_scope
+  
+  // Define scope
+  edge drop_scope -> @if_statement.bottom
+  attr (drop_scope) type = "drop_scopes"
+}
+
+// Case statements - create scoped block
+(case_statement
+  value: (_) @value) @case_statement {
+  node @case_statement.after_scope
+  node @case_statement.bottom
+  node drop_scope
+  
+  // Define scope
+  edge drop_scope -> @case_statement.bottom
+  attr (drop_scope) type = "drop_scopes"
+}
+
+// Heredoc content definition
+(heredoc_body) @heredoc {
+  node @heredoc.after_scope
+  
+  // Define heredoc
+  attr (@heredoc.def) node_definition = @heredoc
+  attr (@heredoc.def) syntax_type = "heredoc"
+  
+  // Connect heredoc definition
+  edge @heredoc.after_scope -> @heredoc.def
+}
+
+// Function calls
+(command
+  name: (word) @name
+  (#is-not? @name "source")
+  (#is-not? @name ".")) @function_call {
+  node @function_call.ref
+  node @function_call.after
+  
+  // Reference function
+  attr (@function_call.ref) node_reference = @name
+  attr (@function_call.ref) syntax_type = "function_call"
+  
+  // Connect reference
+  edge @function_call.after -> @function_call.ref
+  
+  // Scope lookup for function
+  edge @function_call.ref -> @stmt.lexical_scope
+}
+
+// Array variables
+(array_variable_name
+  name: (word) @name) @array {
+  node @array.ref
+  node @array.after
+  
+  // Reference array
+  attr (@array.ref) node_reference = @name
+  attr (@array.ref) syntax_type = "array_reference"
+  
+  // Connect reference
+  edge @array.after -> @array.ref
+  
+  // Scope lookup for array
+  edge @array.ref -> @stmt.lexical_scope
+}
+
+// Aliases
+(command
+  name: (word) @name
+  (#eq? @name "alias")
+  argument: (_) @alias_def) @alias {
+  // Define alias
+  attr (@alias_def.def) node_definition = @alias_def
+  attr (@alias_def.def) definiens_node = @alias
+  attr (@alias_def.def) syntax_type = "alias"
+  
+  // Connect alias definition
+  edge @alias.after_scope -> @alias_def.def
+  
+  // Add alias to exports and definitions
+  edge @stmt.exports -> @alias_def.def
+  edge @stmt.var_defs -> @alias_def.def
+}
+
+// Pipeline commands
+(pipeline
+  command: (command
+    name: (word) @name)) @pipeline {
+  node @pipeline.ref
+  node @pipeline.after
+  
+  // Reference command in pipeline
+  attr (@pipeline.ref) node_reference = @name
+  attr (@pipeline.ref) syntax_type = "pipeline_command"
+  
+  // Connect reference
+  edge @pipeline.after -> @pipeline.ref
+  
+  // Scope lookup for command
+  edge @pipeline.ref -> @stmt.lexical_scope
+}
+
+// Redirections
+(redirected_statement
+  command: (command
+    name: (word) @name)) @redirection {
+  node @redirection.ref
+  node @redirection.after
+  
+  // Reference command with redirection
+  attr (@redirection.ref) node_reference = @name
+  attr (@redirection.ref) syntax_type = "redirected_command"
+  
+  // Connect reference
+  edge @redirection.after -> @redirection.ref
+  
+  // Scope lookup for command
+  edge @redirection.ref -> @stmt.lexical_scope
+}
+
+// Shell options
+(command
+  name: (word) @name
+  argument: (word) @option
+  (#match? @name "^(set|shopt)$")) @shell_option {
+  // Define shell option
+  attr (@option.def) node_definition = @option
+  attr (@option.def) definiens_node = @shell_option
+  attr (@option.def) syntax_type = "shell_option"
+  
+  // Connect shell option definition
+  edge @shell_option.after_scope -> @option.def
+}
+
+// Environment variables in command context
+(command
+  (variable_assignment
+    name: (variable_name) @name)) @env_var {
+  // Define environment variable
+  attr (@name.def) node_definition = @name
+  attr (@name.def) definiens_node = @env_var
+  attr (@name.def) syntax_type = "environment_variable"
+  
+  // Connect environment variable definition
+  edge @env_var.after_scope -> @name.def
+  
+  // Make environment variable available
+  edge @stmt.var_defs -> @name.def
+}
+
+// Script shebang
+(program 
+  .
+  (comment) @shebang
+  (#match? @shebang "^#!/")) @prog {
+  node shebang_node
+  
+  // Define shebang
+  attr (shebang_node) node_definition = @shebang
+  attr (shebang_node) syntax_type = "shebang"
+  
+  // Connect shebang definition
+  edge @prog.lexical_defs -> shebang_node
+}
+
+// Special parameters ($1, $2, etc., $#, $@, $*)
+(special_variable_name) @special_var {
+  node @special_var.ref
+  
+  // Reference special parameter
+  attr (@special_var.ref) node_reference = @special_var
+  attr (@special_var.ref) syntax_type = "special_parameter"
+  
+  // Connect reference
+  edge @special_var.ref -> @stmt.lexical_scope
+}

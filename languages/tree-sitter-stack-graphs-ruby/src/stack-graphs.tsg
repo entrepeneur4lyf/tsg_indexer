@@ -1,0 +1,587 @@
+;; -*- coding: utf-8 -*-
+;; ------------------------------------------------------------------------------------------------
+;; Copyright © 2023, tsg_indexer authors.
+;; Licensed under either of Apache License, Version 2.0, or MIT license, at your option.
+;; ------------------------------------------------------------------------------------------------
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Stack graphs definition for Ruby
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;; Global Variables
+;; ^^^^^^^^^^^^^^^^
+
+global FILE_PATH           ; project relative path of this file
+global PROJECT_NAME = ""   ; project name, used to isolate different projects in the same stack graph
+global ROOT_PATH = ""      ; path to the project root directory
+
+global JUMP_TO_SCOPE_NODE
+global ROOT_NODE
+global SCOPE_ROOT
+
+;; Attribute Shorthands
+;; ^^^^^^^^^^^^^^^^^^^^
+
+attribute node_definition = node        => type = "pop_symbol", node_symbol = node, is_definition
+attribute node_reference = node         => type = "push_symbol", node_symbol = node, is_reference
+attribute pop_node = node               => type = "pop_symbol", node_symbol = node
+attribute pop_scoped_node = node        => type = "pop_scoped_symbol", node_symbol = node
+attribute pop_scoped_symbol = symbol    => type = "pop_scoped_symbol", symbol = symbol
+attribute pop_symbol = symbol           => type = "pop_symbol", symbol = symbol
+attribute push_node = node              => type = "push_symbol", node_symbol = node
+attribute push_scoped_node = node       => type = "push_scoped_symbol", node_symbol = node
+attribute push_scoped_symbol = symbol   => type = "push_scoped_symbol", symbol = symbol
+attribute push_symbol = symbol          => type = "push_symbol", symbol = symbol
+attribute scoped_node_definition = node => type = "pop_scoped_symbol", node_symbol = node, is_definition
+attribute scoped_node_reference = node  => type = "push_scoped_symbol", node_symbol = node, is_reference
+attribute symbol_definition = symbol    => type = "pop_symbol", symbol = symbol, is_definition
+attribute symbol_reference = symbol     => type = "push_symbol", symbol = symbol, is_reference
+
+attribute node_symbol = node            => symbol = (source-text node), source_node = node
+
+;; Root Node
+;; ^^^^^^^^^
+
+(program) @root {
+  node @root.defs
+  node @root.exports
+  node @root.lexical_defs
+  node @root.lexical_scope
+  node @root.type_scope
+  node @root.namespace_scope
+  
+  ; Connect source file to global scope
+  edge @root.lexical_scope -> SCOPE_ROOT
+  edge @root.lexical_scope -> @root.defs
+}
+
+;; Method Definitions
+;; ^^^^^^^^^^^^^^^^
+
+(method 
+  name: (identifier) @name
+  parameters: (method_parameters) @params
+  body: (_) @body) @method {
+  node @method.defs
+  node @method.exports
+  node @method.lexical_scope
+  node @method.call
+  node @method.return_value
+  node @method.drop_scope
+  
+  ; Define the method
+  attr (@name.def) node_definition = @name
+  attr (@name.def) definiens_node = @method
+  attr (@name.def) syntax_type = "method"
+  
+  ; Connect method to parent scope
+  edge @method.lexical_scope -> @method.before_scope
+  edge @method.lexical_scope -> @method.defs
+  
+  ; Connect the method definition
+  edge @method.after_scope -> @name.def
+  edge @name.def -> @method.call
+  
+  ; Connect the method body and parameters
+  edge @params.before_scope -> @method.lexical_scope
+  edge @body.before_scope -> @params.after_scope
+  
+  ; Connect method calls
+  edge @method.call -> @method.return_value
+  edge @method.drop_scope -> @method.bottom
+  
+  ; Set node attributes
+  attr (@method.call) pop_scoped_symbol = "()"
+  attr (@method.drop_scope) type = "drop_scopes"
+  attr (@method.return_value) is_exported
+}
+
+;; Class Definitions
+;; ^^^^^^^^^^^^^^^
+
+(class
+  name: (constant) @name
+  superclass: (_)? @superclass
+  body: (_) @body) @class {
+  node @class.defs
+  node @class.exports
+  node @class.lexical_scope
+  node @class.type_scope
+  node @class.drop_scope
+  
+  ; Define the class
+  attr (@name.def) node_definition = @name
+  attr (@name.def) definiens_node = @class
+  attr (@name.def) syntax_type = "class"
+  
+  ; Connect class to parent scope
+  edge @class.lexical_scope -> @class.before_scope
+  edge @class.lexical_scope -> @class.defs
+  
+  ; Connect the class definition
+  edge @class.after_scope -> @name.def
+  
+  ; Connect to superclass if present
+  if present @superclass {
+    edge @name.def -> @superclass.ref
+  }
+  
+  ; Connect class body to class definition
+  edge @body.before_scope -> @class.lexical_scope
+  
+  ; Handle class scope
+  edge @class.drop_scope -> @class.bottom
+  attr (@class.drop_scope) type = "drop_scopes"
+  
+  ; Classes are exported
+  attr (@name.def) is_exported
+}
+
+;; Module Definitions
+;; ^^^^^^^^^^^^^^^^
+
+(module
+  name: (constant) @name
+  body: (_) @body) @module {
+  node @module.defs
+  node @module.exports
+  node @module.lexical_scope
+  node @module.namespace_scope
+  node @module.drop_scope
+  
+  ; Define the module
+  attr (@name.def) node_definition = @name
+  attr (@name.def) definiens_node = @module
+  attr (@name.def) syntax_type = "module"
+  
+  ; Connect module to parent scope
+  edge @module.lexical_scope -> @module.before_scope
+  edge @module.lexical_scope -> @module.defs
+  
+  ; Connect the module definition
+  edge @module.after_scope -> @name.def
+  
+  ; Connect module body to module definition
+  edge @body.before_scope -> @module.lexical_scope
+  
+  ; Handle module scope
+  edge @module.drop_scope -> @module.bottom
+  attr (@module.drop_scope) type = "drop_scopes"
+  
+  ; Modules are exported
+  attr (@name.def) is_exported
+}
+
+;; Singleton Method Definitions (Class Methods)
+;; ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+(singleton_method
+  object: (_) @object
+  name: (identifier) @name
+  parameters: (method_parameters) @params
+  body: (_) @body) @singleton_method {
+  node @singleton_method.defs
+  node @singleton_method.exports
+  node @singleton_method.lexical_scope
+  node @singleton_method.call
+  node @singleton_method.return_value
+  node @singleton_method.drop_scope
+  
+  ; Define the singleton method
+  attr (@name.def) node_definition = @name
+  attr (@name.def) definiens_node = @singleton_method
+  attr (@name.def) syntax_type = "singleton_method"
+  
+  ; Connect singleton method to parent scope
+  edge @singleton_method.lexical_scope -> @singleton_method.before_scope
+  edge @singleton_method.lexical_scope -> @singleton_method.defs
+  
+  ; Connect the singleton method definition
+  edge @singleton_method.after_scope -> @name.def
+  edge @object.ref -> @name.def
+  edge @name.def -> @singleton_method.call
+  
+  ; Connect the method body and parameters
+  edge @params.before_scope -> @singleton_method.lexical_scope
+  edge @body.before_scope -> @params.after_scope
+  
+  ; Connect method calls
+  edge @singleton_method.call -> @singleton_method.return_value
+  edge @singleton_method.drop_scope -> @singleton_method.bottom
+  
+  ; Set node attributes
+  attr (@singleton_method.call) pop_scoped_symbol = "()"
+  attr (@singleton_method.drop_scope) type = "drop_scopes"
+  attr (@singleton_method.return_value) is_exported
+}
+
+;; Method Parameters
+;; ^^^^^^^^^^^^^^^
+
+(method_parameters) @params {
+  node @params.before_scope
+  node @params.after_scope
+}
+
+(required_parameter
+  name: (identifier) @name) @param {
+  ; Define the parameter
+  attr (@name.def) node_definition = @name
+  attr (@name.def) definiens_node = @param
+  attr (@name.def) syntax_type = "parameter"
+  
+  ; Connect parameter to params list
+  edge @params.after_scope -> @name.def
+}
+
+(optional_parameter
+  name: (identifier) @name) @param {
+  ; Define the optional parameter
+  attr (@name.def) node_definition = @name
+  attr (@name.def) definiens_node = @param
+  attr (@name.def) syntax_type = "parameter"
+  
+  ; Connect parameter to params list
+  edge @params.after_scope -> @name.def
+}
+
+(keyword_parameter
+  name: (identifier) @name) @param {
+  ; Define the keyword parameter
+  attr (@name.def) node_definition = @name
+  attr (@name.def) definiens_node = @param
+  attr (@name.def) syntax_type = "parameter"
+  
+  ; Connect parameter to params list
+  edge @params.after_scope -> @name.def
+}
+
+;; Constant Assignments
+;; ^^^^^^^^^^^^^^^^^^
+
+(assignment
+  left: (constant) @name
+  right: (_) @value) @constant_assignment {
+  node @constant_assignment.defs
+  
+  ; Define the constant
+  attr (@name.def) node_definition = @name
+  attr (@name.def) definiens_node = @constant_assignment
+  attr (@name.def) syntax_type = "constant"
+  
+  ; Connect constant to parent scope
+  edge @constant_assignment.after_scope -> @name.def
+  
+  ; Connect value to constant
+  edge @value.before_scope -> @constant_assignment.before_scope
+  
+  ; Constants are exported
+  attr (@name.def) is_exported
+}
+
+;; Global Variable Assignments
+;; ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+(assignment
+  left: (global_variable) @name
+  right: (_) @value) @global_assignment {
+  node @global_assignment.defs
+  
+  ; Define the global variable
+  attr (@name.def) node_definition = @name
+  attr (@name.def) definiens_node = @global_assignment
+  attr (@name.def) syntax_type = "global_variable"
+  
+  ; Connect global variable to parent scope
+  edge @global_assignment.after_scope -> @name.def
+  
+  ; Connect value to global variable
+  edge @value.before_scope -> @global_assignment.before_scope
+  
+  ; Global variables are exported
+  attr (@name.def) is_exported
+}
+
+;; Instance Variable Assignments
+;; ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+(assignment
+  left: (instance_variable) @name
+  right: (_) @value) @instance_var_assignment {
+  node @instance_var_assignment.defs
+  
+  ; Define the instance variable
+  attr (@name.def) node_definition = @name
+  attr (@name.def) definiens_node = @instance_var_assignment
+  attr (@name.def) syntax_type = "instance_variable"
+  
+  ; Connect instance variable to parent scope
+  edge @instance_var_assignment.after_scope -> @name.def
+  
+  ; Connect value to instance variable
+  edge @value.before_scope -> @instance_var_assignment.before_scope
+}
+
+;; Class Variable Assignments
+;; ^^^^^^^^^^^^^^^^^^^^^^^^
+
+(assignment
+  left: (class_variable) @name
+  right: (_) @value) @class_var_assignment {
+  node @class_var_assignment.defs
+  
+  ; Define the class variable
+  attr (@name.def) node_definition = @name
+  attr (@name.def) definiens_node = @class_var_assignment
+  attr (@name.def) syntax_type = "class_variable"
+  
+  ; Connect class variable to parent scope
+  edge @class_var_assignment.after_scope -> @name.def
+  
+  ; Connect value to class variable
+  edge @value.before_scope -> @class_var_assignment.before_scope
+}
+
+;; Local Variable Assignments
+;; ^^^^^^^^^^^^^^^^^^^^^^^^
+
+(assignment
+  left: (identifier) @name
+  right: (_) @value) @local_var_assignment {
+  node @local_var_assignment.defs
+  
+  ; Define the local variable
+  attr (@name.def) node_definition = @name
+  attr (@name.def) definiens_node = @local_var_assignment
+  attr (@name.def) syntax_type = "local_variable"
+  
+  ; Connect local variable to parent scope
+  edge @local_var_assignment.after_scope -> @name.def
+  
+  ; Connect value to local variable
+  edge @value.before_scope -> @local_var_assignment.before_scope
+}
+
+;; Method Calls with Explicit Receiver
+;; ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+(call
+  receiver: (_) @receiver
+  method: (identifier) @name
+  arguments: (argument_list)? @args) @method_call {
+  node @method_call.ref
+  node @method_call.args
+  
+  ; Reference the method
+  attr (@method_call.ref) node_reference = @name
+  
+  ; Connect method call to receiver and arguments
+  edge @method_call.ref -> @receiver.ref
+  
+  ; Connect arguments if present
+  if present @args {
+    edge @args.before_scope -> @method_call.before_scope
+  }
+}
+
+;; Method Calls without Explicit Receiver
+;; ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+(call
+  method: (identifier) @name
+  arguments: (argument_list)? @args) @implicit_call {
+  node @implicit_call.ref
+  node @implicit_call.args
+  
+  ; Reference the method
+  attr (@implicit_call.ref) node_reference = @name
+  
+  ; Connect method call to implicit self
+  edge @implicit_call.ref -> @implicit_call.before_scope
+  
+  ; Connect arguments if present
+  if present @args {
+    edge @args.before_scope -> @implicit_call.before_scope
+  }
+}
+
+;; Constant References
+;; ^^^^^^^^^^^^^^^^^
+
+(constant) @const {
+  node @const.ref
+  node @const.def
+  
+  ; Reference the constant
+  attr (@const.ref) node_reference = @const
+  
+  ; Connect reference to scope
+  edge @const.ref -> @const.before_scope
+}
+
+;; Variable References
+;; ^^^^^^^^^^^^^^^^^
+
+(identifier) @var {
+  node @var.ref
+  node @var.def
+  
+  ; Reference the variable
+  attr (@var.ref) node_reference = @var
+  
+  ; Connect reference to scope
+  edge @var.ref -> @var.before_scope
+}
+
+;; Require Statements
+;; ^^^^^^^^^^^^^^^^
+
+(call
+  method: (identifier) @require_method
+  arguments: (argument_list
+    (string (string_content) @path))) @require_call {
+  ; Check if this is a require call
+  let method_name = (source-text @require_method)
+  if equals method_name "require" {
+    node import_node
+    
+    ; Define the import
+    attr (import_node) pop_symbol = (source-text @path), is_definition, source_node = @require_call
+    attr (import_node) syntax_type = "require"
+    
+    ; Connect require statement to parent scope
+    edge @require_call.after_scope -> import_node
+  }
+}
+
+;; Instance Variable References
+;; ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+(instance_variable) @ivar {
+  node @ivar.ref
+  node @ivar.def
+  
+  ; Reference the instance variable
+  attr (@ivar.ref) node_reference = @ivar
+  
+  ; Connect reference to scope
+  edge @ivar.ref -> @ivar.before_scope
+}
+
+;; Global Variable References
+;; ^^^^^^^^^^^^^^^^^^^^^^^^
+
+(global_variable) @gvar {
+  node @gvar.ref
+  node @gvar.def
+  
+  ; Reference the global variable
+  attr (@gvar.ref) node_reference = @gvar
+  
+  ; Connect reference to scope
+  edge @gvar.ref -> @gvar.before_scope
+}
+
+;; Class Variable References
+;; ^^^^^^^^^^^^^^^^^^^^^^^
+
+(class_variable) @cvar {
+  node @cvar.ref
+  node @cvar.def
+  
+  ; Reference the class variable
+  attr (@cvar.ref) node_reference = @cvar
+  
+  ; Connect reference to scope
+  edge @cvar.ref -> @cvar.before_scope
+}
+
+;; Lambda/Block Definitions
+;; ^^^^^^^^^^^^^^^^^^^^^^
+
+(lambda
+  parameters: (block_parameters) @params
+  body: (_) @body) @lambda {
+  node @lambda.defs
+  node @lambda.lexical_scope
+  node @lambda.call
+  node @lambda.return_value
+  node @lambda.drop_scope
+  
+  ; Connect lambda to parent scope
+  edge @lambda.lexical_scope -> @lambda.before_scope
+  edge @lambda.lexical_scope -> @lambda.defs
+  
+  ; Connect the lambda body and parameters
+  edge @params.before_scope -> @lambda.lexical_scope
+  edge @body.before_scope -> @params.after_scope
+  
+  ; Connect lambda calls
+  edge @lambda.call -> @lambda.return_value
+  edge @lambda.drop_scope -> @lambda.bottom
+  
+  ; Set node attributes
+  attr (@lambda.call) pop_scoped_symbol = "()"
+  attr (@lambda.drop_scope) type = "drop_scopes"
+}
+
+;; Block Parameters
+;; ^^^^^^^^^^^^^^
+
+(block_parameters) @params {
+  node @params.before_scope
+  node @params.after_scope
+}
+
+(block_parameter
+  name: (identifier) @name) @param {
+  ; Define the block parameter
+  attr (@name.def) node_definition = @name
+  attr (@name.def) definiens_node = @param
+  attr (@name.def) syntax_type = "parameter"
+  
+  ; Connect parameter to params list
+  edge @params.after_scope -> @name.def
+}
+
+;; Blocks (do...end and { ... })
+;; ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+(block
+  parameters: (block_parameters) @params
+  body: (_) @body) @block {
+  node @block.defs
+  node @block.lexical_scope
+  node @block.drop_scope
+  
+  ; Connect block to parent scope
+  edge @block.lexical_scope -> @block.before_scope
+  edge @block.lexical_scope -> @block.defs
+  
+  ; Connect the block body and parameters
+  edge @params.before_scope -> @block.lexical_scope
+  edge @body.before_scope -> @params.after_scope
+  
+  ; Handle block scope
+  edge @block.drop_scope -> @block.bottom
+  attr (@block.drop_scope) type = "drop_scopes"
+}
+
+;; Constant Path References
+;; ^^^^^^^^^^^^^^^^^^^^^^
+
+(scope_resolution
+  scope: (_) @scope
+  name: (constant) @name) @scope_resolution {
+  node push_scope
+  
+  ; Set up namespace resolution
+  attr (push_scope) push_symbol = "::"
+  
+  ; Connect name to path through scope
+  edge @name.ref -> push_scope
+  edge push_scope -> @scope.ref
+}
+
+;; The End
+;; ^^^^^^

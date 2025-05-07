@@ -1,0 +1,610 @@
+;; -*- coding: utf-8 -*-
+;; ------------------------------------------------------------------------------------------------
+;; Copyright © 2023, tsg_indexer authors.
+;; Licensed under either of Apache License, Version 2.0, or MIT license, at your option.
+;; ------------------------------------------------------------------------------------------------
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Stack graphs definition for Rust
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;; Global Variables
+;; ^^^^^^^^^^^^^^^^
+
+global FILE_PATH           ; project relative path of this file
+global PROJECT_NAME = ""   ; project name, used to isolate different projects in the same stack graph
+global ROOT_PATH = ""      ; path to the project root directory
+
+global JUMP_TO_SCOPE_NODE
+global ROOT_NODE
+global SCOPE_ROOT
+
+;; Attribute Shorthands
+;; ^^^^^^^^^^^^^^^^^^^^
+
+attribute node_definition = node        => type = "pop_symbol", node_symbol = node, is_definition
+attribute node_reference = node         => type = "push_symbol", node_symbol = node, is_reference
+attribute pop_node = node               => type = "pop_symbol", node_symbol = node
+attribute pop_scoped_node = node        => type = "pop_scoped_symbol", node_symbol = node
+attribute pop_scoped_symbol = symbol    => type = "pop_scoped_symbol", symbol = symbol
+attribute pop_symbol = symbol           => type = "pop_symbol", symbol = symbol
+attribute push_node = node              => type = "push_symbol", node_symbol = node
+attribute push_scoped_node = node       => type = "push_scoped_symbol", node_symbol = node
+attribute push_scoped_symbol = symbol   => type = "push_scoped_symbol", symbol = symbol
+attribute push_symbol = symbol          => type = "push_symbol", symbol = symbol
+attribute scoped_node_definition = node => type = "pop_scoped_symbol", node_symbol = node, is_definition
+attribute scoped_node_reference = node  => type = "push_scoped_symbol", node_symbol = node, is_reference
+attribute symbol_definition = symbol    => type = "pop_symbol", symbol = symbol, is_definition
+attribute symbol_reference = symbol     => type = "push_symbol", symbol = symbol, is_reference
+
+attribute node_symbol = node            => symbol = (source-text node), source_node = node
+
+;; Root Module Node
+;; ^^^^^^^^^^^^^^^
+
+(source_file) @root {
+  node @root.defs
+  node @root.exports
+  node @root.lexical_defs
+  node @root.lexical_scope
+  node @root.type_scope
+  node @root.namespace_scope
+  
+  ; Connect source file to global scope
+  edge @root.lexical_scope -> SCOPE_ROOT
+  edge @root.lexical_scope -> @root.defs
+}
+
+;; Module System
+;; ^^^^^^^^^^^^
+
+(source_file) @mod {
+  node mod_file_def
+  node mod_file_ref
+  
+  var module_def = mod_file_def
+  var module_ref = mod_file_ref
+  
+  ; get the file path relative to the root path
+  let rel_path = (replace FILE_PATH ROOT_PATH "")
+  scan rel_path {
+    "([^/]+)/"
+    {
+      node def_dot
+      attr (def_dot) pop_symbol = "::"
+      node next_def
+      
+      edge module_def -> def_dot
+      edge def_dot -> next_def
+      
+      attr (module_def) pop_symbol = $1
+      
+      set module_def = next_def
+      
+      node ref_dot
+      attr (ref_dot) push_symbol = "::"
+      node next_ref
+      
+      edge next_ref -> ref_dot
+      edge ref_dot -> module_ref
+      
+      attr (module_ref) push_symbol = $1
+      
+      set module_ref = next_ref
+    }
+    
+    "([^/]+)\.rs$"
+    {
+      node def_dot
+      attr (def_dot) pop_symbol = "::"
+      node next_def
+      
+      edge module_def -> def_dot
+      edge def_dot -> next_def
+      
+      attr (module_def) pop_symbol = $1, is_definition, source_node = @mod, empty_source_span
+      
+      set module_def = next_def
+    }
+  }
+  
+  edge ROOT_NODE -> mod_file_def
+  edge mod_file_ref -> ROOT_NODE
+  edge module_def -> @mod.after_scope
+}
+
+;; Module declarations
+;; ^^^^^^^^^^^^^^^^^^
+
+(mod_item
+  name: (identifier) @name
+  body: (declaration_list) @body) @mod {
+  node @mod.defs
+  node @mod.exports
+  node @mod.lexical_scope
+  node @mod.type_scope
+  node @mod.namespace_scope
+  
+  ; Define the module
+  attr (@name.def) node_definition = @name
+  attr (@name.def) definiens_node = @mod
+  attr (@name.def) syntax_type = "module"
+  
+  ; Connect the module to the parent scope
+  edge @mod.lexical_scope -> @mod.before_scope
+  edge @mod.lexical_scope -> @mod.defs
+  
+  ; Connect the module name to the module body
+  edge @mod.after_scope -> @name.def
+  edge @name.def -> @body.before_scope
+}
+
+;; External mod reference (mod file without body)
+;; ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+(mod_item
+  name: (identifier) @name) @mod {
+  node @mod.defs
+  node @mod.exports
+  node @mod.lexical_scope
+  
+  attr (@name.def) node_definition = @name
+  attr (@name.def) definiens_node = @mod
+  attr (@name.def) syntax_type = "module"
+  
+  edge @mod.lexical_scope -> @mod.before_scope
+  edge @mod.after_scope -> @name.def
+}
+
+;; Function Declarations
+;; ^^^^^^^^^^^^^^^^^^^^
+
+(function_item 
+  name: (identifier) @name
+  parameters: (parameters) @params
+  body: (block) @body) @function {
+  node @function.defs
+  node @function.exports
+  node @function.lexical_scope
+  node @function.call
+  node @function.return_value
+  node @function.drop_scope
+  
+  ; Define the function
+  attr (@name.def) node_definition = @name
+  attr (@name.def) definiens_node = @function
+  attr (@name.def) syntax_type = "function"
+  
+  ; Connect function to parent scope
+  edge @function.lexical_scope -> @function.before_scope
+  edge @function.lexical_scope -> @function.defs
+  
+  ; Connect the function definition
+  edge @function.after_scope -> @name.def
+  edge @name.def -> @function.call
+  
+  ; Connect the function body and parameters
+  edge @params.before_scope -> @function.lexical_scope
+  edge @body.before_scope -> @params.after_scope
+  
+  ; Connect function calls
+  edge @function.call -> @function.return_value
+  edge @function.drop_scope -> @function.bottom
+  
+  ; Set node attributes
+  attr (@function.call) pop_scoped_symbol = "()"
+  attr (@function.drop_scope) type = "drop_scopes"
+  attr (@function.return_value) is_exported
+}
+
+;; Function Signatures (without bodies)
+;; ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+(function_signature_item
+  name: (identifier) @name
+  parameters: (parameters) @params) @function {
+  node @function.defs
+  node @function.lexical_scope
+  
+  ; Define the function signature
+  attr (@name.def) node_definition = @name
+  attr (@name.def) definiens_node = @function
+  attr (@name.def) syntax_type = "function"
+  
+  ; Connect signature to parent scope
+  edge @function.lexical_scope -> @function.before_scope
+  edge @function.after_scope -> @name.def
+  edge @params.before_scope -> @function.lexical_scope
+}
+
+;; Struct Declarations
+;; ^^^^^^^^^^^^^^^^^
+
+(struct_item
+  name: (type_identifier) @name
+  body: (field_declaration_list) @body) @struct {
+  node @struct.defs
+  node @struct.exports
+  node @struct.lexical_scope
+  node @struct.type_scope
+  
+  ; Define the struct
+  attr (@name.def) node_definition = @name
+  attr (@name.def) definiens_node = @struct
+  attr (@name.def) syntax_type = "struct"
+  
+  ; Connect struct to parent scope
+  edge @struct.lexical_scope -> @struct.before_scope
+  edge @struct.lexical_scope -> @struct.defs
+  
+  ; Connect the struct definition
+  edge @struct.after_scope -> @name.def
+  
+  ; Connect struct body to struct definition
+  edge @body.before_scope -> @struct.lexical_scope
+}
+
+;; Tuple Struct Declarations
+;; ^^^^^^^^^^^^^^^^^^^^^^^^
+
+(struct_item
+  name: (type_identifier) @name
+  body: (ordered_field_declaration_list) @body) @struct {
+  node @struct.defs
+  node @struct.exports
+  node @struct.lexical_scope
+  
+  ; Define the tuple struct
+  attr (@name.def) node_definition = @name
+  attr (@name.def) definiens_node = @struct
+  attr (@name.def) syntax_type = "struct"
+  
+  ; Connect struct to parent scope
+  edge @struct.lexical_scope -> @struct.before_scope
+  edge @struct.after_scope -> @name.def
+  
+  ; Connect struct body to struct definition
+  edge @body.before_scope -> @struct.lexical_scope
+}
+
+;; Enum Declarations
+;; ^^^^^^^^^^^^^^^
+
+(enum_item
+  name: (type_identifier) @name
+  body: (enum_variant_list) @body) @enum {
+  node @enum.defs
+  node @enum.exports
+  node @enum.lexical_scope
+  
+  ; Define the enum
+  attr (@name.def) node_definition = @name
+  attr (@name.def) definiens_node = @enum
+  attr (@name.def) syntax_type = "enum"
+  
+  ; Connect enum to parent scope
+  edge @enum.lexical_scope -> @enum.before_scope
+  edge @enum.lexical_scope -> @enum.defs
+  
+  ; Connect the enum definition
+  edge @enum.after_scope -> @name.def
+  
+  ; Connect enum body to enum definition
+  edge @body.before_scope -> @enum.lexical_scope
+}
+
+;; Enum Variants
+;; ^^^^^^^^^^^^
+
+(enum_variant
+  name: (identifier) @name) @variant {
+  node @variant.defs
+  
+  ; Define the enum variant
+  attr (@name.def) node_definition = @name
+  attr (@name.def) definiens_node = @variant
+  attr (@name.def) syntax_type = "enum_variant"
+  
+  ; Connect variant to parent enum
+  edge @variant.after_scope -> @name.def
+}
+
+;; Trait Declarations
+;; ^^^^^^^^^^^^^^^^
+
+(trait_item
+  name: (type_identifier) @name
+  body: (declaration_list) @body) @trait {
+  node @trait.defs
+  node @trait.exports
+  node @trait.lexical_scope
+  
+  ; Define the trait
+  attr (@name.def) node_definition = @name
+  attr (@name.def) definiens_node = @trait
+  attr (@name.def) syntax_type = "trait"
+  
+  ; Connect trait to parent scope
+  edge @trait.lexical_scope -> @trait.before_scope
+  edge @trait.lexical_scope -> @trait.defs
+  
+  ; Connect the trait definition
+  edge @trait.after_scope -> @name.def
+  
+  ; Connect trait body to trait definition
+  edge @body.before_scope -> @trait.lexical_scope
+}
+
+;; Impl Blocks
+;; ^^^^^^^^^^
+
+(impl_item
+  trait: (type_identifier) @trait
+  type: (type_identifier) @type) @impl {
+  node @impl.defs
+  node @impl.lexical_scope
+  node @impl.member_attrs
+  node @impl.members
+  
+  ; Connect impl block to parent scope
+  edge @impl.lexical_scope -> @impl.before_scope
+  edge @impl.lexical_scope -> @impl.defs
+  
+  ; Connect impl to the type and trait
+  edge @impl.after_scope -> @type.ref
+  edge @trait.ref -> @impl.after_scope
+}
+
+(impl_item
+  type: (type_identifier) @type) @impl {
+  node @impl.defs
+  node @impl.lexical_scope
+  node @impl.member_attrs
+  node @impl.members
+  
+  ; Connect impl block to parent scope
+  edge @impl.lexical_scope -> @impl.before_scope
+  edge @impl.lexical_scope -> @impl.defs
+  
+  ; Connect impl to the type
+  edge @impl.after_scope -> @type.ref
+}
+
+;; Associated Items in Impl blocks
+;; ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+(impl_item
+  body: (declaration_list) @body) @impl {
+  ; Connect impl body to impl block
+  edge @body.before_scope -> @impl.lexical_scope
+}
+
+;; Field Declarations
+;; ^^^^^^^^^^^^^^^^
+
+(field_declaration
+  name: (field_identifier) @name) @field {
+  node @field.type_scope
+  
+  ; Define the field
+  attr (@name.def) node_definition = @name
+  attr (@name.def) syntax_type = "field"
+  
+  ; Connect field to parent struct/enum
+  edge @field.after_scope -> @name.def
+}
+
+;; Struct/Tuple Field Access
+;; ^^^^^^^^^^^^^^^^^^^^^^^^
+
+(field_expression
+  field: (field_identifier) @field) @expr {
+  ; Reference the field
+  attr (@field.ref) node_reference = @field
+  
+  ; Connect field to parent expression
+  edge @field.ref -> @expr.before_scope
+}
+
+;; Type References and Definitions
+;; ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+(type_identifier) @name {
+  node @name.ref
+  node @name.def
+  
+  ; Set up type reference
+  attr (@name.ref) node_reference = @name
+  
+  ; Connect type reference to scope
+  edge @name.ref -> @name.before_scope
+}
+
+;; Variable References
+;; ^^^^^^^^^^^^^^^^^
+
+(identifier) @name {
+  node @name.ref
+  node @name.def
+  
+  ; Set up variable reference
+  attr (@name.ref) node_reference = @name
+  
+  ; Connect variable reference to scope
+  edge @name.ref -> @name.before_scope
+}
+
+;; Let Statements
+;; ^^^^^^^^^^^^^
+
+(let_declaration
+  pattern: (identifier) @name
+  value: (_) @expr) @let {
+  node @let.defs
+  
+  ; Define the variable
+  attr (@name.def) node_definition = @name
+  attr (@name.def) syntax_type = "variable"
+  
+  ; Connect variable to parent scope
+  edge @let.after_scope -> @name.def
+  
+  ; Connect expression to let statement
+  edge @expr.before_scope -> @let.before_scope
+}
+
+;; Function Parameters
+;; ^^^^^^^^^^^^^^^^^
+
+(parameters) @params {
+  node @params.before_scope
+  node @params.after_scope
+}
+
+(parameter
+  pattern: (identifier) @name) @param {
+  ; Define the parameter
+  attr (@name.def) node_definition = @name
+  attr (@name.def) syntax_type = "parameter"
+  
+  ; Connect parameter to params list
+  edge @param.after_scope -> @name.def
+}
+
+;; Path Expressions (namespace resolution)
+;; ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+(scoped_identifier
+  path: (identifier) @path
+  name: (identifier) @name) @scoped {
+  node push_scope
+  
+  ; Set up namespace resolution
+  attr (push_scope) push_symbol = "::"
+  
+  ; Connect name to path through scope
+  edge @name.ref -> push_scope
+  edge push_scope -> @path.ref
+}
+
+(scoped_type_identifier
+  path: (identifier) @path
+  name: (type_identifier) @name) @scoped {
+  node push_scope
+  
+  ; Set up namespace resolution for types
+  attr (push_scope) push_symbol = "::"
+  
+  ; Connect type name to path through scope
+  edge @name.ref -> push_scope
+  edge push_scope -> @path.ref
+}
+
+;; Multiple path segments
+;; ^^^^^^^^^^^^^^^^^^^^
+
+(scoped_identifier
+  path: (scoped_identifier) @path
+  name: (identifier) @name) @scoped {
+  node push_scope
+  
+  ; Set up namespace resolution for nested paths
+  attr (push_scope) push_symbol = "::"
+  
+  ; Connect name to path through scope
+  edge @name.ref -> push_scope
+  edge push_scope -> @path.ref
+}
+
+(scoped_type_identifier
+  path: (scoped_identifier) @path
+  name: (type_identifier) @name) @scoped {
+  node push_scope
+  
+  ; Set up namespace resolution for nested type paths
+  attr (push_scope) push_symbol = "::"
+  
+  ; Connect type name to path through scope
+  edge @name.ref -> push_scope
+  edge push_scope -> @path.ref
+}
+
+;; Block Structure
+;; ^^^^^^^^^^^^^
+
+(block) @block {
+  node @block.before_scope
+  node @block.after_scope
+  node @block.defs
+  
+  ; Connect block to parent scope and its own scope
+  edge @block.before_scope -> @block.defs
+}
+
+(block (_) @stmt .) @block {
+  ; Connect first statement to block
+  edge @block.after_scope -> @stmt.after_scope
+}
+
+(block (_) @stmt1 . (_) @stmt2) {
+  ; Connect statements in sequence
+  edge @stmt2.before_scope -> @stmt1.after_scope
+}
+
+(block . (_) @stmt) @block {
+  ; Connect block to its first statement
+  edge @stmt.before_scope -> @block.before_scope
+}
+
+;; Use Declarations (imports)
+;; ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+(use_declaration
+  path: (_) @path) @use {
+  ; Connect use declaration to parent scope
+  edge @use.after_scope -> @path.ref
+}
+
+(use_declaration
+  path: (scoped_identifier
+          path: (_) @path
+          name: (identifier) @name)) @use {
+  ; Define the imported item
+  attr (@name.def) node_definition = @name
+  attr (@name.def) syntax_type = "import"
+  
+  ; Connect import to parent scope
+  edge @use.after_scope -> @name.def
+}
+
+;; Method Calls
+;; ^^^^^^^^^^^
+
+(call_expression
+  function: (field_expression
+              field: (field_identifier) @method)) @call {
+  node @call.args
+  
+  ; Reference the method
+  attr (@method.ref) node_reference = @method
+  
+  ; Connect method call to arguments
+  edge @method.ref -> @call.args
+}
+
+;; Function Calls
+;; ^^^^^^^^^^^^^
+
+(call_expression
+  function: (identifier) @function) @call {
+  node @call.args
+  
+  ; Reference the function
+  attr (@function.ref) node_reference = @function
+  
+  ; Connect function call to arguments
+  edge @function.ref -> @call.args
+}
+
+;; The End
+;; ^^^^^^

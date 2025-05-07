@@ -1,0 +1,535 @@
+// Tree-sitter Stack Graphs definition for HTML
+// This file defines how HTML constructs are mapped to stack graph nodes and edges.
+
+// Attribute Shorthands
+attribute node_definition = node        => type = "pop_symbol", node_symbol = node, is_definition
+attribute node_reference = node         => type = "push_symbol", node_symbol = node, is_reference
+attribute pop_node = node               => type = "pop_symbol", node_symbol = node
+attribute pop_scoped_node = node        => type = "pop_scoped_symbol", node_symbol = node
+attribute pop_scoped_symbol = symbol    => type = "pop_scoped_symbol", symbol = symbol
+attribute pop_symbol = symbol           => type = "pop_symbol", symbol = symbol
+attribute push_node = node              => type = "push_symbol", node_symbol = node
+attribute push_scoped_node = node       => type = "push_scoped_symbol", node_symbol = node
+attribute push_scoped_symbol = symbol   => type = "push_scoped_symbol", symbol = symbol
+attribute push_symbol = symbol          => type = "push_symbol", symbol = symbol
+attribute scoped_node_definition = node => type = "pop_scoped_symbol", node_symbol = node, is_definition
+attribute scoped_node_reference = node  => type = "push_scoped_symbol", node_symbol = node, is_reference
+attribute symbol_definition = symbol    => type = "pop_symbol", symbol = symbol, is_definition
+attribute symbol_reference = symbol     => type = "push_symbol", symbol = symbol, is_reference
+
+attribute node_symbol = node            => symbol = (source-text node), source_node = node
+
+// Global Variables
+global JUMP_TO_SCOPE_NODE
+global ROOT_NODE
+global SCOPE_ROOT
+
+// Program Nodes
+(document)@doc {
+  node @doc.defs
+  node @doc.exports
+  node @doc.lexical_defs
+  node @doc.lexical_scope
+  node @doc.elements
+  
+  // Establish document scope connections
+  edge @doc.lexical_scope -> @doc.defs
+  edge @doc.lexical_scope -> SCOPE_ROOT
+}
+
+// Propagate scope from document to elements
+(document (_)@node)@doc {
+  // Propagate lexical scope
+  edge @node.lexical_scope -> @doc.lexical_scope
+  
+  // Expose elements
+  edge @doc.elements -> @node.element
+}
+
+// Element nodes - define for all elements
+(element)@el {
+  node @el.after_scope
+  node @el.element
+  node @el.lexical_defs
+  node @el.lexical_scope
+}
+
+// Establish element hierarchy - child elements inherit parent scope
+(element 
+  (element)@child) @parent {
+  // Propagate lexical scope
+  edge @child.lexical_scope -> @parent.after_scope
+}
+
+// HTML elements with ID attributes - defines an ID that can be referenced elsewhere
+(element
+  (start_tag
+    (attribute
+      (attribute_name) @attr_name
+      (quoted_attribute_value
+        (attribute_value) @id_value)
+      (#eq? @attr_name "id"))) @element {
+  // Define ID
+  attr (@id_value.def) node_definition = @id_value
+  attr (@id_value.def) definiens_node = @element
+  attr (@id_value.def) syntax_type = "id"
+  attr (@id_value.def) is_exported
+  
+  // Connect ID definition
+  edge @element.after_scope -> @id_value.def
+  
+  // Export ID definition to document level for global access
+  edge @doc.defs -> @id_value.def
+}
+
+// ID references in href, for, etc. attributes (like href="#section1")
+(element
+  (start_tag
+    (attribute
+      (attribute_name) @attr_name
+      (quoted_attribute_value
+        (attribute_value) @id_ref)
+      (#match? @attr_name "^(href|for)$")
+      (#match? @id_ref "^#"))) @ref_element {
+  node @id_ref.ref
+  
+  // Reference ID
+  attr (@id_ref.ref) node_reference = @id_ref
+  attr (@id_ref.ref) referenced_through_attribute = @attr_name
+  attr (@id_ref.ref) syntax_type = "id_reference"
+  
+  // Connect reference
+  edge @ref_element.after -> @id_ref.ref
+  
+  // Look up ID in document scope
+  edge @id_ref.ref -> @doc.lexical_scope
+}
+
+// Class definitions - define styles that can be referenced
+(element
+  (start_tag
+    (attribute
+      (attribute_name) @attr_name
+      (quoted_attribute_value
+        (attribute_value) @class_value)
+      (#eq? @attr_name "class"))) @class_element {
+  // Define class
+  attr (@class_value.def) node_definition = @class_value
+  attr (@class_value.def) definiens_node = @class_element
+  attr (@class_value.def) syntax_type = "class"
+  
+  // Connect class definition
+  edge @class_element.after_scope -> @class_value.def
+  
+  // Add to document level for CSS selectors
+  edge @doc.defs -> @class_value.def
+}
+
+// Custom elements - define custom web components
+(element
+  (start_tag
+    (tag_name) @tag_name
+    (#match? @tag_name "^[a-z]+-[a-z-]+$")) @custom_element {
+  // Define custom element
+  attr (@tag_name.def) node_definition = @tag_name
+  attr (@tag_name.def) definiens_node = @custom_element
+  attr (@tag_name.def) syntax_type = "custom_element"
+  attr (@tag_name.def) is_exported
+  
+  // Connect custom element definition
+  edge @custom_element.after_scope -> @tag_name.def
+  
+  // Export custom element to document level
+  edge @doc.exports -> @tag_name.def
+}
+
+// Form elements with name attributes - define form fields
+(element
+  (start_tag
+    (tag_name) @tag_name
+    (attribute
+      (attribute_name) @attr_name
+      (quoted_attribute_value
+        (attribute_value) @name_value)
+      (#eq? @attr_name "name")
+      (#match? @tag_name "^(input|select|textarea|button)$"))) @form_element {
+  // Define form field
+  attr (@name_value.def) node_definition = @name_value
+  attr (@name_value.def) definiens_node = @form_element
+  attr (@name_value.def) syntax_type = "form_field"
+  
+  // Connect form field definition
+  edge @form_element.after_scope -> @name_value.def
+  
+  // Add to nearest form scope
+  node form_field_def
+  attr (form_field_def) pop_symbol = "form-field"
+  attr (form_field_def) source_node = @name_value
+  edge form_field_def -> @name_value.def
+  edge @form_element.lexical_scope -> form_field_def
+}
+
+// JavaScript event handlers (onclick, onload, etc.)
+(element
+  (start_tag
+    (attribute
+      (attribute_name) @attr_name
+      (quoted_attribute_value
+        (attribute_value) @handler_value)
+      (#match? @attr_name "^on[a-z]+$"))) @event_element {
+  // Define event handler
+  attr (@handler_value.def) node_definition = @handler_value
+  attr (@handler_value.def) definiens_node = @event_element
+  attr (@handler_value.def) syntax_type = "event_handler"
+  
+  // Connect event handler definition
+  edge @event_element.after_scope -> @handler_value.def
+  
+  // Extract event type for reference
+  node event_type_node
+  attr (event_type_node) symbol = (replace (source-text @attr_name) "^on" "")
+  attr (event_type_node) source_node = @attr_name
+  edge @handler_value.def -> event_type_node
+}
+
+// <script> tags with src attributes - external script imports
+(element
+  (start_tag
+    (tag_name) @tag_name
+    (attribute
+      (attribute_name) @attr_name
+      (quoted_attribute_value
+        (attribute_value) @src_value)
+      (#eq? @tag_name "script")
+      (#eq? @attr_name "src"))) @script_element {
+  node import_node
+  
+  // Define script import
+  attr (import_node) node_definition = @src_value
+  attr (import_node) definiens_node = @script_element
+  attr (import_node) syntax_type = "script_import"
+  attr (import_node) is_exported
+  
+  // Connect script import definition
+  edge @script_element.after_scope -> import_node
+  
+  // Add import to document level
+  edge @doc.exports -> import_node
+  
+  // Create reference to external script
+  node script_ref
+  attr (script_ref) node_reference = @src_value
+  attr (script_ref) syntax_type = "external_script"
+  edge script_ref -> @doc.lexical_scope
+}
+
+// <link> tags with href attributes - CSS stylesheet imports
+(element
+  (start_tag
+    (tag_name) @tag_name
+    (attribute
+      (attribute_name) @attr_name_rel
+      (quoted_attribute_value
+        (attribute_value) @rel_value))
+    (attribute
+      (attribute_name) @attr_name_href
+      (quoted_attribute_value
+        (attribute_value) @href_value))
+    (#eq? @tag_name "link")
+    (#eq? @attr_name_rel "rel")
+    (#eq? @rel_value "stylesheet")
+    (#eq? @attr_name_href "href")) @link_element {
+  node import_node
+  
+  // Define stylesheet import
+  attr (import_node) node_definition = @href_value
+  attr (import_node) definiens_node = @link_element
+  attr (import_node) syntax_type = "stylesheet_import"
+  attr (import_node) is_exported
+  
+  // Connect stylesheet import definition
+  edge @link_element.after_scope -> import_node
+  
+  // Add import to document level
+  edge @doc.exports -> import_node
+  
+  // Create reference to external stylesheet
+  node style_ref
+  attr (style_ref) node_reference = @href_value
+  attr (style_ref) syntax_type = "external_stylesheet"
+  edge style_ref -> @doc.lexical_scope
+}
+
+// <meta> tags with name attributes
+(element
+  (start_tag
+    (tag_name) @tag_name
+    (attribute
+      (attribute_name) @attr_name
+      (quoted_attribute_value
+        (attribute_value) @name_value))
+    (#eq? @tag_name "meta")
+    (#eq? @attr_name "name")) @meta_element {
+  // Define meta tag
+  attr (@name_value.def) node_definition = @name_value
+  attr (@name_value.def) definiens_node = @meta_element
+  attr (@name_value.def) syntax_type = "meta_tag"
+  
+  // Connect meta tag definition
+  edge @meta_element.after_scope -> @name_value.def
+  
+  // Add to document metadata
+  edge @doc.defs -> @name_value.def
+}
+
+// <label> tags with for attributes - references form elements
+(element
+  (start_tag
+    (tag_name) @tag_name
+    (attribute
+      (attribute_name) @attr_name
+      (quoted_attribute_value
+        (attribute_value) @for_value))
+    (#eq? @tag_name "label")
+    (#eq? @attr_name "for")) @label_element {
+  node @for_value.ref
+  
+  // Reference form element
+  attr (@for_value.ref) node_reference = @for_value
+  attr (@for_value.ref) syntax_type = "form_field_reference"
+  
+  // Connect reference
+  edge @label_element.after -> @for_value.ref
+  
+  // Look up in document scope
+  edge @for_value.ref -> @doc.lexical_scope
+}
+
+// <a> tags with href attributes (that don't start with #) - external links
+(element
+  (start_tag
+    (tag_name) @tag_name
+    (attribute
+      (attribute_name) @attr_name
+      (quoted_attribute_value
+        (attribute_value) @href_value))
+    (#eq? @tag_name "a")
+    (#eq? @attr_name "href")
+    (#not-match? @href_value "^#")) @a_element {
+  // Define external link
+  attr (@href_value.def) node_definition = @href_value
+  attr (@href_value.def) definiens_node = @a_element
+  attr (@href_value.def) syntax_type = "external_link"
+  attr (@href_value.def) is_exported
+  
+  // Connect external link definition
+  edge @a_element.after_scope -> @href_value.def
+}
+
+// <iframe> tags with src attributes
+(element
+  (start_tag
+    (tag_name) @tag_name
+    (attribute
+      (attribute_name) @attr_name
+      (quoted_attribute_value
+        (attribute_value) @src_value))
+    (#eq? @tag_name "iframe")
+    (#eq? @attr_name "src")) @iframe_element {
+  // Define iframe source
+  attr (@src_value.def) node_definition = @src_value
+  attr (@src_value.def) definiens_node = @iframe_element
+  attr (@src_value.def) syntax_type = "iframe_source"
+  attr (@src_value.def) is_exported
+  
+  // Connect iframe source definition
+  edge @iframe_element.after_scope -> @src_value.def
+  
+  // Create reference to external content
+  node iframe_ref
+  attr (iframe_ref) node_reference = @src_value
+  attr (iframe_ref) syntax_type = "external_iframe_content"
+  edge iframe_ref -> @doc.lexical_scope
+}
+
+// <img> tags with src attributes
+(element
+  (start_tag
+    (tag_name) @tag_name
+    (attribute
+      (attribute_name) @attr_name
+      (quoted_attribute_value
+        (attribute_value) @src_value))
+    (#eq? @tag_name "img")
+    (#eq? @attr_name "src")) @img_element {
+  // Define image source
+  attr (@src_value.def) node_definition = @src_value
+  attr (@src_value.def) definiens_node = @img_element
+  attr (@src_value.def) syntax_type = "image_source"
+  attr (@src_value.def) is_exported
+  
+  // Connect image source definition
+  edge @img_element.after_scope -> @src_value.def
+}
+
+// <source> tags in <picture> elements
+(element
+  (tag_name) @parent_tag
+  (element
+    (start_tag
+      (tag_name) @tag_name
+      (attribute
+        (attribute_name) @attr_name
+        (quoted_attribute_value
+          (attribute_value) @src_value)))
+    (#eq? @parent_tag "picture")
+    (#eq? @tag_name "source")
+    (#match? @attr_name "^(src|srcset)$")) @source_element {
+  // Define responsive image source
+  attr (@src_value.def) node_definition = @src_value
+  attr (@src_value.def) definiens_node = @source_element
+  attr (@src_value.def) syntax_type = "responsive_image_source"
+  
+  // Connect responsive image source definition
+  edge @source_element.after_scope -> @src_value.def
+}
+
+// <form> elements with action attributes
+(element
+  (start_tag
+    (tag_name) @tag_name
+    (attribute
+      (attribute_name) @attr_name
+      (quoted_attribute_value
+        (attribute_value) @action_value))
+    (#eq? @tag_name "form")
+    (#eq? @attr_name "action")) @form_element {
+  // Define form action
+  attr (@action_value.def) node_definition = @action_value
+  attr (@action_value.def) definiens_node = @form_element
+  attr (@action_value.def) syntax_type = "form_action"
+  attr (@action_value.def) is_exported
+  
+  // Connect form action definition
+  edge @form_element.after_scope -> @action_value.def
+  
+  // Create form scope for form fields
+  node form_scope
+  attr (form_scope) symbol = "form-scope"
+  attr (form_scope) source_node = @form_element
+  edge @form_element.after_scope -> form_scope
+}
+
+// Tag scopes - provide scoping for nested elements
+(element
+  (start_tag
+    (tag_name) @tag_name)
+  ((_) @content)*
+  (end_tag
+    (tag_name) @end_tag_name)
+  (#eq? @tag_name @end_tag_name)) @element_scope {
+  // Set up element scope
+  node @element_scope.after_scope
+  node drop_scope
+  
+  // Special handling based on tag type
+  edge drop_scope -> @element_scope.bottom
+  attr (drop_scope) type = "drop_scopes"
+  
+  // Connect scope to tag name for reference
+  node tag_scope
+  attr (tag_scope) symbol = (source-text @tag_name)
+  attr (tag_scope) source_node = @tag_name
+  edge @element_scope.after_scope -> tag_scope
+}
+
+// <style> tag content - defines CSS styles
+(element
+  (start_tag
+    (tag_name) @tag_name)
+  (text) @style_content
+  (end_tag
+    (tag_name) @end_tag_name)
+  (#eq? @tag_name "style")
+  (#eq? @end_tag_name "style")) @style_element {
+  // Define inline style
+  attr (@style_content.def) node_definition = @style_content
+  attr (@style_content.def) definiens_node = @style_element
+  attr (@style_content.def) syntax_type = "inline_style"
+  attr (@style_content.def) is_exported
+  
+  // Connect inline style definition
+  edge @style_element.after_scope -> @style_content.def
+  
+  // Add to document styles
+  edge @doc.exports -> @style_content.def
+}
+
+// <script> tag content - defines JavaScript code
+(element
+  (start_tag
+    (tag_name) @tag_name)
+  (text) @script_content
+  (end_tag
+    (tag_name) @end_tag_name)
+  (#eq? @tag_name "script")
+  (#eq? @end_tag_name "script")) @script_element {
+  // Define inline script
+  attr (@script_content.def) node_definition = @script_content
+  attr (@script_content.def) definiens_node = @script_element
+  attr (@script_content.def) syntax_type = "inline_script"
+  attr (@script_content.def) is_exported
+  
+  // Connect inline script definition
+  edge @script_element.after_scope -> @script_content.def
+  
+  // Add to document scripts
+  edge @doc.exports -> @script_content.def
+}
+
+// <template> tag content - defines reusable HTML fragments
+(element
+  (start_tag
+    (tag_name) @tag_name
+    (attribute
+      (attribute_name) @attr_name
+      (quoted_attribute_value
+        (attribute_value) @id_value))
+    (#eq? @tag_name "template")
+    (#eq? @attr_name "id")) @template_element {
+  // Define template
+  attr (@id_value.def) node_definition = @id_value
+  attr (@id_value.def) definiens_node = @template_element
+  attr (@id_value.def) syntax_type = "template"
+  attr (@id_value.def) is_exported
+  
+  // Connect template definition
+  edge @template_element.after_scope -> @id_value.def
+  
+  // Add to document templates
+  edge @doc.exports -> @id_value.def
+}
+
+// Data attributes (data-*) - define custom data
+(element
+  (start_tag
+    (attribute
+      (attribute_name) @attr_name
+      (quoted_attribute_value
+        (attribute_value) @data_value)
+      (#match? @attr_name "^data-"))) @data_element {
+  // Define data attribute
+  attr (@data_value.def) node_definition = @data_value
+  attr (@data_value.def) definiens_node = @data_element
+  attr (@data_value.def) syntax_type = "data_attribute"
+  attr (@attr_name.info) attribute_name = @attr_name
+  
+  // Connect data attribute definition
+  edge @data_element.after_scope -> @data_value.def
+  
+  // Extract data attribute name for reference
+  node data_attr_node
+  attr (data_attr_node) symbol = (replace (source-text @attr_name) "^data-" "")
+  attr (data_attr_node) source_node = @attr_name
+  edge @data_value.def -> data_attr_node
+}

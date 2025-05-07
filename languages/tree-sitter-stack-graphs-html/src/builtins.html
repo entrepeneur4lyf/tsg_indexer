@@ -1,0 +1,447 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="HTML built-in elements and attributes example">
+  <meta name="keywords" content="HTML, HTML5, elements, attributes">
+  <title>HTML Built-in Elements Example</title>
+  
+  <link rel="stylesheet" href="styles.css">
+  <link rel="icon" href="favicon.ico" type="image/x-icon">
+  
+  <style>
+    /* Internal CSS styles */
+    body {
+      font-family: 'Arial', sans-serif;
+      line-height: 1.6;
+      margin: 0;
+      padding: 20px;
+      color: #333;
+    }
+    
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+    
+    header {
+      background-color: #f5f5f5;
+      padding: 10px 20px;
+      border-bottom: 1px solid #ddd;
+    }
+    
+    nav ul {
+      display: flex;
+      list-style: none;
+      padding: 0;
+    }
+    
+    nav li {
+      margin-right: 20px;
+    }
+    
+    nav a {
+      text-decoration: none;
+      color: #007bff;
+    }
+    
+    section {
+      margin: 20px 0;
+    }
+    
+    table {
+      border-collapse: collapse;
+      width: 100%;
+    }
+    
+    th, td {
+      border: 1px solid #ddd;
+      padding: 8px;
+      text-align: left;
+    }
+    
+    th {
+      background-color: #f2f2f2;
+    }
+    
+    form {
+      max-width: 500px;
+      margin: 20px 0;
+    }
+    
+    .form-group {
+      margin-bottom: 15px;
+    }
+    
+    label {
+      display: block;
+      margin-bottom: 5px;
+    }
+    
+    input, textarea, select {
+      width: 100%;
+      padding: 8px;
+      box-sizing: border-box;
+      border: 1px solid #ddd;
+    }
+    
+    button {
+      background-color: #007bff;
+      color: white;
+      border: none;
+      padding: 10px 15px;
+      cursor: pointer;
+    }
+    
+    button:hover {
+      background-color: #0056b3;
+    }
+    
+    footer {
+      margin-top: 30px;
+      padding: 10px;
+      background-color: #f5f5f5;
+      text-align: center;
+      border-top: 1px solid #ddd;
+    }
+  </style>
+  
+  <script>
+    // Internal JavaScript code
+    document.addEventListener('DOMContentLoaded', function() {
+      const form = document.getElementById('contact-form');
+      
+      if (form) {
+        form.addEventListener('submit', function(e) {
+          e.preventDefault();
+          alert('Form submitted!');
+        });
+      }
+      
+      // Example of accessing elements by ID
+      const header = document.getElementById('main-header');
+      if (header) {
+        header.style.backgroundColor = '#f0f0f0';
+      }
+      
+      // Example of accessing elements by class
+      const navLinks = document.querySelectorAll('.nav-link');
+      navLinks.forEach(link => {
+        link.addEventListener('mouseover', function() {
+          this.style.textDecoration = 'underline';
+        });
+        
+        link.addEventListener('mouseout', function() {
+          this.style.textDecoration = 'none';
+        });
+      });
+    });
+  </script>
+</head>
+<body>
+  <div class="container">
+    <header id="main-header">
+      <h1>HTML Built-in Elements Example</h1>
+      <nav>
+        <ul>
+          <li><a href="#text-elements" class="nav-link">Text Elements</a></li>
+          <li><a href="#lists" class="nav-link">Lists</a></li>
+          <li><a href="#tables" class="nav-link">Tables</a></li>
+          <li><a href="#forms" class="nav-link">Forms</a></li>
+          <li><a href="#media" class="nav-link">Media</a></li>
+        </ul>
+      </nav>
+    </header>
+    
+    <main>
+      <section id="text-elements">
+        <h2>Text Elements</h2>
+        <p>This is a paragraph element. HTML provides several elements for text formatting.</p>
+        <p>Here are some examples of inline text elements:</p>
+        <ul>
+          <li><strong>Strong text</strong> for important content</li>
+          <li><em>Emphasized text</em> for stressed content</li>
+          <li><code>Code text</code> for computer code</li>
+          <li><mark>Marked text</mark> for highlighted content</li>
+          <li><small>Small text</small> for small print</li>
+          <li>Text with <sub>subscript</sub> and <sup>superscript</sup></li>
+        </ul>
+        
+        <blockquote cite="https://www.example.com/quote">
+          This is a blockquote element. It is used to indicate quoted text from another source.
+          <cite>- Example Source</cite>
+        </blockquote>
+        
+        <pre>
+function example() {
+  console.log("This is preformatted text");
+}
+        </pre>
+      </section>
+      
+      <section id="lists">
+        <h2>Lists</h2>
+        
+        <h3>Ordered List</h3>
+        <ol>
+          <li>First item</li>
+          <li>Second item</li>
+          <li>Third item</li>
+        </ol>
+        
+        <h3>Unordered List</h3>
+        <ul>
+          <li>Item one</li>
+          <li>Item two</li>
+          <li>Item three</li>
+        </ul>
+        
+        <h3>Definition List</h3>
+        <dl>
+          <dt>HTML</dt>
+          <dd>HyperText Markup Language, the standard language for creating web pages.</dd>
+          
+          <dt>CSS</dt>
+          <dd>Cascading Style Sheets, used for describing the presentation of HTML documents.</dd>
+          
+          <dt>JavaScript</dt>
+          <dd>A programming language that enables interactive web pages.</dd>
+        </dl>
+      </section>
+      
+      <section id="tables">
+        <h2>Tables</h2>
+        
+        <table>
+          <caption>Sample Data Table</caption>
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Age</th>
+              <th>Country</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>John Doe</td>
+              <td>28</td>
+              <td>USA</td>
+            </tr>
+            <tr>
+              <td>Jane Smith</td>
+              <td>32</td>
+              <td>Canada</td>
+            </tr>
+            <tr>
+              <td>Robert Johnson</td>
+              <td>45</td>
+              <td>UK</td>
+            </tr>
+          </tbody>
+          <tfoot>
+            <tr>
+              <td colspan="3">Data last updated: 2023</td>
+            </tr>
+          </tfoot>
+        </table>
+      </section>
+      
+      <section id="forms">
+        <h2>Forms</h2>
+        
+        <form id="contact-form" action="/submit" method="post">
+          <div class="form-group">
+            <label for="name">Name:</label>
+            <input type="text" id="name" name="name" required placeholder="Enter your name">
+          </div>
+          
+          <div class="form-group">
+            <label for="email">Email:</label>
+            <input type="email" id="email" name="email" required placeholder="Enter your email">
+          </div>
+          
+          <div class="form-group">
+            <label for="country">Country:</label>
+            <select id="country" name="country">
+              <option value="">Select a country</option>
+              <optgroup label="North America">
+                <option value="usa">United States</option>
+                <option value="canada">Canada</option>
+                <option value="mexico">Mexico</option>
+              </optgroup>
+              <optgroup label="Europe">
+                <option value="uk">United Kingdom</option>
+                <option value="france">France</option>
+                <option value="germany">Germany</option>
+              </optgroup>
+            </select>
+          </div>
+          
+          <div class="form-group">
+            <label>Interests:</label>
+            <label>
+              <input type="checkbox" name="interests" value="html"> HTML
+            </label>
+            <label>
+              <input type="checkbox" name="interests" value="css"> CSS
+            </label>
+            <label>
+              <input type="checkbox" name="interests" value="javascript"> JavaScript
+            </label>
+          </div>
+          
+          <div class="form-group">
+            <label>Experience Level:</label>
+            <label>
+              <input type="radio" name="experience" value="beginner"> Beginner
+            </label>
+            <label>
+              <input type="radio" name="experience" value="intermediate"> Intermediate
+            </label>
+            <label>
+              <input type="radio" name="experience" value="advanced"> Advanced
+            </label>
+          </div>
+          
+          <div class="form-group">
+            <label for="message">Message:</label>
+            <textarea id="message" name="message" rows="5" placeholder="Enter your message"></textarea>
+          </div>
+          
+          <div class="form-group">
+            <label for="file">Upload File:</label>
+            <input type="file" id="file" name="file">
+          </div>
+          
+          <div class="form-group">
+            <label for="date">Select Date:</label>
+            <input type="date" id="date" name="date">
+          </div>
+          
+          <div class="form-group">
+            <label for="color">Select Color:</label>
+            <input type="color" id="color" name="color" value="#007bff">
+          </div>
+          
+          <fieldset>
+            <legend>Personal Information</legend>
+            <div class="form-group">
+              <label for="age">Age:</label>
+              <input type="number" id="age" name="age" min="18" max="100">
+            </div>
+            <div class="form-group">
+              <label for="phone">Phone:</label>
+              <input type="tel" id="phone" name="phone" pattern="[0-9]{3}-[0-9]{3}-[0-9]{4}" placeholder="123-456-7890">
+            </div>
+          </fieldset>
+          
+          <button type="submit">Submit</button>
+          <button type="reset">Reset</button>
+        </form>
+      </section>
+      
+      <section id="media">
+        <h2>Media Elements</h2>
+        
+        <h3>Images</h3>
+        <figure>
+          <img src="example-image.jpg" alt="Example image" width="400" height="300">
+          <figcaption>Figure 1: Example image with caption</figcaption>
+        </figure>
+        
+        <h3>Audio</h3>
+        <audio controls>
+          <source src="example-audio.mp3" type="audio/mp3">
+          <source src="example-audio.ogg" type="audio/ogg">
+          Your browser does not support the audio element.
+        </audio>
+        
+        <h3>Video</h3>
+        <video width="320" height="240" controls poster="video-poster.jpg">
+          <source src="example-video.mp4" type="video/mp4">
+          <source src="example-video.webm" type="video/webm">
+          <track src="subtitles-en.vtt" kind="subtitles" srclang="en" label="English">
+          Your browser does not support the video element.
+        </video>
+        
+        <h3>Iframe</h3>
+        <iframe src="https://www.example.com" width="600" height="400" title="Example iframe">
+          Your browser does not support iframes.
+        </iframe>
+        
+        <h3>Canvas</h3>
+        <canvas id="example-canvas" width="200" height="100" style="border:1px solid #000;"></canvas>
+        <script>
+          const canvas = document.getElementById('example-canvas');
+          if (canvas.getContext) {
+            const ctx = canvas.getContext('2d');
+            ctx.fillStyle = '#007bff';
+            ctx.fillRect(10, 10, 180, 80);
+          }
+        </script>
+      </section>
+      
+      <section id="semantic">
+        <h2>Semantic Elements</h2>
+        
+        <article>
+          <header>
+            <h3>Example Article</h3>
+            <p>Published on <time datetime="2023-05-21">May 21, 2023</time></p>
+          </header>
+          <p>This is an example of an article element, which represents a self-contained composition.</p>
+          <aside>
+            <p>This is an aside element, representing content that is tangentially related to the content around it.</p>
+          </aside>
+          <footer>
+            <p>Article footer - Author: John Doe</p>
+          </footer>
+        </article>
+        
+        <details>
+          <summary>Click to show more information</summary>
+          <p>This is additional information that is hidden by default and can be toggled by clicking the summary element.</p>
+        </details>
+        
+        <address>
+          Contact information:<br>
+          John Doe<br>
+          123 Main St<br>
+          Anytown, USA<br>
+          <a href="mailto:john@example.com">john@example.com</a>
+        </address>
+      </section>
+      
+      <!-- Custom elements example -->
+      <section id="custom-elements">
+        <h2>Custom Elements</h2>
+        <p>Example of a custom element:</p>
+        <user-profile name="John Doe" role="Developer"></user-profile>
+        
+        <template id="user-card-template">
+          <div class="user-card">
+            <img src="" alt="User Avatar">
+            <div class="user-info">
+              <h4></h4>
+              <p></p>
+            </div>
+          </div>
+        </template>
+      </section>
+    </main>
+    
+    <footer>
+      <p>&copy; 2023 HTML Examples. All rights reserved.</p>
+      <p>
+        <small>
+          This is a demonstration of HTML elements for the tree-sitter-stack-graphs project.
+        </small>
+      </p>
+    </footer>
+  </div>
+  
+  <script src="main.js" defer></script>
+</body>
+</html>
+

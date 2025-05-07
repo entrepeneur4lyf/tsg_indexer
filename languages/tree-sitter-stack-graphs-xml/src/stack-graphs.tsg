@@ -1,0 +1,56 @@
+// Tree-sitter Stack Graphs definition for Xml
+// This file defines how Xml constructs are mapped to stack graph nodes and edges.
+
+// Function/method declarations (generic pattern)
+(function
+  name: (_) @name) @function {
+  node @function.call
+  node return_value
+  node drop_scope
+  
+  attr (@name.def) node_definition = @name
+  attr (@name.def) definiens_node = @function
+  attr (@name.def) syntax_type = "function"
+  
+  edge @function.after_scope -> @name.def
+  edge @name.def -> @function.call
+  edge @function.call -> return_value
+  edge drop_scope -> @function.bottom
+  attr (drop_scope) type = "drop_scopes"
+  attr (@function.call) pop_scoped_symbol = "()"
+  edge @function.params.before_scope -> JUMP_TO_SCOPE_NODE
+  attr (return_value) is_exported
+}
+
+// Class/type declarations (generic pattern)
+(class
+  name: (_) @name) @class {
+  node @class.after_scope
+  node drop_scope
+  
+  attr (@name.def) node_definition = @name
+  attr (@name.def) definiens_node = @class
+  attr (@name.def) syntax_type = "class"
+  
+  edge @class.after_scope -> @name.def
+  edge drop_scope -> @class.bottom
+  attr (drop_scope) type = "drop_scopes"
+  attr (@name.def) is_exported
+}
+
+// Variable declarations (generic pattern)
+(variable
+  name: (_) @name) @variable {
+  attr (@name.def) node_definition = @name
+  attr (@name.def) definiens_node = @variable
+  attr (@name.def) syntax_type = "variable"
+  
+  edge @variable.after_scope -> @name.def
+}
+
+// Identifiers and references (generic pattern)
+(identifier) @id {
+  node @id.ref
+  
+  attr (@id.ref) node_reference = @id
+}

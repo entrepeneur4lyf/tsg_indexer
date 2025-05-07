@@ -1,0 +1,214 @@
+// Tree-sitter Stack Graphs definition for CSS
+// This file defines how CSS constructs are mapped to stack graph nodes and edges.
+
+// Selectors
+(id_selector
+  name: (id_name) @name) @id_selector {
+  attr (@name.def) node_definition = @name
+  attr (@name.def) definiens_node = @id_selector
+  attr (@name.def) syntax_type = "id_selector"
+  
+  edge @id_selector.after_scope -> @name.def
+}
+
+// Class selectors
+(class_selector
+  name: (class_name) @name) @class_selector {
+  attr (@name.def) node_definition = @name
+  attr (@name.def) definiens_node = @class_selector
+  attr (@name.def) syntax_type = "class_selector"
+  
+  edge @class_selector.after_scope -> @name.def
+}
+
+// Keyframes at-rule
+(keyframes_statement
+  name: (_) @name) @keyframes {
+  node @keyframes.after_scope
+  
+  attr (@name.def) node_definition = @name
+  attr (@name.def) definiens_node = @keyframes
+  attr (@name.def) syntax_type = "keyframes"
+  
+  edge @keyframes.after_scope -> @name.def
+}
+
+// Animation property
+(declaration
+  name: (property_name) @name
+  [
+    (value (plain_value) @animation_name)
+    (value (plain_value) @keyframes_ref)
+  ]
+  (#eq? @name "animation-name")) @animation_decl {
+  node @animation_decl.ref
+  
+  attr (@animation_decl.ref) node_reference = @keyframes_ref
+  
+  edge @animation_decl.after -> @animation_decl.ref
+}
+
+// Media queries
+(media_statement
+  (media_query_list
+    (media_query
+      (media_feature
+        name: (property_name) @name
+        value: (plain_value) @value)))) @media {
+  attr (@name.def) node_definition = @name
+  attr (@name.def) definiens_node = @media
+  attr (@name.def) syntax_type = "media_feature"
+  
+  edge @media.after_scope -> @name.def
+}
+
+// Custom properties (CSS variables)
+(declaration
+  name: (property_name) @name
+  (#match? @name "^--")) @custom_property {
+  attr (@name.def) node_definition = @name
+  attr (@name.def) definiens_node = @custom_property
+  attr (@name.def) syntax_type = "custom_property"
+  
+  edge @custom_property.after_scope -> @name.def
+}
+
+// Variable references in var() function
+(call_expression
+  function: (function_name) @fn_name
+  arguments: (arguments
+    (plain_value) @var_name)
+  (#eq? @fn_name "var")
+  (#match? @var_name "^--")) @var_usage {
+  node @var_usage.ref
+  
+  attr (@var_usage.ref) node_reference = @var_name
+  
+  edge @var_usage.after -> @var_usage.ref
+}
+
+// Import statements
+(import_statement
+  url: (string_value) @url) @import {
+  node import_node
+  
+  attr (import_node) node_definition = @url
+  attr (import_node) syntax_type = "import"
+  
+  edge @import.after_scope -> import_node
+}
+
+// Pseudo-classes
+(pseudo_class_selector
+  name: (class_name) @name) @pseudo_class {
+  attr (@name.def) node_definition = @name
+  attr (@name.def) definiens_node = @pseudo_class
+  attr (@name.def) syntax_type = "pseudo_class"
+  
+  edge @pseudo_class.after_scope -> @name.def
+}
+
+// Pseudo-elements
+(pseudo_element_selector
+  name: (tag_name) @name) @pseudo_element {
+  attr (@name.def) node_definition = @name
+  attr (@name.def) definiens_node = @pseudo_element
+  attr (@name.def) syntax_type = "pseudo_element"
+  
+  edge @pseudo_element.after_scope -> @name.def
+}
+
+// CSS Functions
+(call_expression
+  function: (function_name) @name) @function {
+  attr (@name.def) node_definition = @name
+  attr (@name.def) definiens_node = @function
+  attr (@name.def) syntax_type = "function"
+  
+  edge @function.after_scope -> @name.def
+}
+
+// CSS Properties
+(declaration
+  name: (property_name) @name) @property {
+  attr (@name.def) node_definition = @name
+  attr (@name.def) definiens_node = @property
+  attr (@name.def) syntax_type = "property"
+  
+  edge @property.after_scope -> @name.def
+}
+
+// CSS At-rules
+(at_rule
+  name: (at_keyword) @name) @at_rule {
+  node @at_rule.after_scope
+  
+  attr (@name.def) node_definition = @name
+  attr (@name.def) definiens_node = @at_rule
+  attr (@name.def) syntax_type = "at_rule"
+  
+  edge @at_rule.after_scope -> @name.def
+}
+
+// CSS Namespace
+(namespace_statement
+  name: (namespace_name) @name) @namespace {
+  node @namespace.after_scope
+  
+  attr (@name.def) node_definition = @name
+  attr (@name.def) definiens_node = @namespace
+  attr (@name.def) syntax_type = "namespace"
+  
+  edge @namespace.after_scope -> @name.def
+}
+
+// Font face at-rule
+(font_face_statement) @font_face {
+  node @font_face.after_scope
+  
+  // Font face doesn't have a direct name, but it defines a font family
+  (declaration
+    name: (property_name) @prop_name
+    value: (value (plain_value) @font_family)
+    (#eq? @prop_name "font-family")) {
+    
+    attr (@font_family.def) node_definition = @font_family
+    attr (@font_family.def) definiens_node = @font_face
+    attr (@font_family.def) syntax_type = "font_family"
+    
+    edge @font_face.after_scope -> @font_family.def
+  }
+}
+
+// Supports at-rule
+(supports_statement
+  condition: (supports_condition) @condition) @supports {
+  node @supports.after_scope
+  
+  attr (@condition.def) node_definition = @condition
+  attr (@condition.def) definiens_node = @supports
+  attr (@condition.def) syntax_type = "supports_condition"
+  
+  edge @supports.after_scope -> @condition.def
+}
+
+// CSS Color values (named colors)
+(plain_value) @color {
+  (#match? @color "^(aliceblue|antiquewhite|aqua|aquamarine|azure|beige|bisque|black|blanchedalmond|blue|blueviolet|brown|burlywood|cadetblue|chartreuse|chocolate|coral|cornflowerblue|cornsilk|crimson|cyan|darkblue|darkcyan|darkgoldenrod|darkgray|darkgreen|darkkhaki|darkmagenta|darkolivegreen|darkorange|darkorchid|darkred|darksalmon|darkseagreen|darkslateblue|darkslategray|darkturquoise|darkviolet|deeppink|deepskyblue|dimgray|dodgerblue|firebrick|floralwhite|forestgreen|fuchsia|gainsboro|ghostwhite|gold|goldenrod|gray|green|greenyellow|honeydew|hotpink|indianred|indigo|ivory|khaki|lavender|lavenderblush|lawngreen|lemonchiffon|lightblue|lightcoral|lightcyan|lightgoldenrodyellow|lightgray|lightgreen|lightpink|lightsalmon|lightseagreen|lightskyblue|lightslategray|lightsteelblue|lightyellow|lime|limegreen|linen|magenta|maroon|mediumaquamarine|mediumblue|mediumorchid|mediumpurple|mediumseagreen|mediumslateblue|mediumspringgreen|mediumturquoise|mediumvioletred|midnightblue|mintcream|mistyrose|moccasin|navajowhite|navy|oldlace|olive|olivedrab|orange|orangered|orchid|palegoldenrod|palegreen|paleturquoise|palevioletred|papayawhip|peachpuff|peru|pink|plum|powderblue|purple|rebeccapurple|red|rosybrown|royalblue|saddlebrown|salmon|sandybrown|seagreen|seashell|sienna|silver|skyblue|slateblue|slategray|snow|springgreen|steelblue|tan|teal|thistle|tomato|turquoise|violet|wheat|white|whitesmoke|yellow|yellowgreen)$")
+  
+  node @color.ref
+  
+  attr (@color.ref) node_reference = @color
+}
+
+// Units
+(unit_value
+  value: (_) @value
+  unit: (_) @unit) {
+  
+  attr (@unit.def) node_definition = @unit
+  attr (@unit.def) definiens_node = @value
+  attr (@unit.def) syntax_type = "unit"
+  
+  edge @value.after_scope -> @unit.def
+}

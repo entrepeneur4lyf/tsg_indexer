@@ -1,0 +1,479 @@
+// Tree-sitter Stack Graphs definition for Zig
+// This file defines how Zig constructs are mapped to stack graph nodes and edges.
+
+// Attribute Shorthands
+attribute node_definition = node        => type = "pop_symbol", node_symbol = node, is_definition
+attribute node_reference = node         => type = "push_symbol", node_symbol = node, is_reference
+attribute pop_node = node               => type = "pop_symbol", node_symbol = node
+attribute pop_scoped_node = node        => type = "pop_scoped_symbol", node_symbol = node
+attribute pop_scoped_symbol = symbol    => type = "pop_scoped_symbol", symbol = symbol
+attribute pop_symbol = symbol           => type = "pop_symbol", symbol = symbol
+attribute push_node = node              => type = "push_symbol", node_symbol = node
+attribute push_scoped_node = node       => type = "push_scoped_symbol", node_symbol = node
+attribute push_scoped_symbol = symbol   => type = "push_scoped_symbol", symbol = symbol
+attribute push_symbol = symbol          => type = "push_symbol", symbol = symbol
+attribute scoped_node_definition = node => type = "pop_scoped_symbol", node_symbol = node, is_definition
+attribute scoped_node_reference = node  => type = "push_scoped_symbol", node_symbol = node, is_reference
+attribute symbol_definition = symbol    => type = "pop_symbol", symbol = symbol, is_definition
+attribute symbol_reference = symbol     => type = "push_symbol", symbol = symbol, is_reference
+
+attribute node_symbol = node            => symbol = (source-text node), source_node = node
+
+// Global Variables
+global JUMP_TO_SCOPE_NODE
+global ROOT_NODE
+global SCOPE_ROOT
+
+// Root node
+(source_file)@root {
+  node @root.defs
+  node @root.exports
+  node @root.lexical_defs
+  node @root.lexical_scope
+  node @root.type_scope
+  node @root.namespace_scope
+  
+  // Connect source file to global scope
+  edge @root.lexical_scope -> SCOPE_ROOT
+  edge @root.lexical_scope -> @root.defs
+}
+
+// Propagate scopes to all top-level declarations
+(source_file (_)@decl)@root {
+  // Propagate scopes
+  edge @decl.lexical_scope -> @root.lexical_scope
+  edge @decl.namespace_scope -> @root.namespace_scope
+  edge @decl.type_scope -> @root.type_scope
+}
+
+// Define nodes for all declaration types
+[
+  (function_declaration)
+  (var_declaration)
+  (const_declaration)
+  (struct_declaration)
+  (enum_declaration)
+  (union_declaration)
+  (container_declaration)
+  (import_declaration)
+  (usingnamespace_declaration)
+  (comptime_declaration)
+  (extern_declaration)
+  (test_declaration)
+]@decl {
+  node @decl.exports
+  node @decl.lexical_defs
+  node @decl.lexical_scope
+  node @decl.namespace_scope
+  node @decl.type_scope
+}
+
+// Function declarations in Zig
+(function_declaration
+  (IDENTIFIER) @name
+  (parameters) @params
+  (block) @body) @function {
+  node @function.after_scope
+  node @function.call
+  node @function.params.before_scope
+  node return_value
+  node drop_scope
+  
+  // Define function
+  attr (@name.def) node_definition = @name
+  attr (@name.def) definiens_node = @function
+  attr (@name.def) syntax_type = "function"
+  attr (@name.def) is_exported
+  
+  // Connect function definition
+  edge @function.after_scope -> @name.def
+  edge @name.def -> @function.call
+  edge @function.call -> return_value
+  edge drop_scope -> @function.bottom
+  
+  // Set up scoping
+  attr (drop_scope) type = "drop_scopes"
+  attr (@function.call) pop_scoped_symbol = "()"
+  edge @function.params.before_scope -> JUMP_TO_SCOPE_NODE
+  
+  // Export function
+  edge @decl.exports -> @name.def
+  
+  // Propagate scope to function body
+  edge @body.lexical_scope -> @function.after_scope
+}
+
+// Handle function parameters
+(parameter
+  (IDENTIFIER) @param_name
+  (type_expression) @param_type) @param {
+  // Define parameter
+  attr (@param_name.def) node_definition = @param_name
+  attr (@param_name.def) definiens_node = @param
+  attr (@param_name.def) syntax_type = "parameter"
+  
+  // Connect parameter definition
+  edge @param.after_scope -> @param_name.def
+  
+  // Make parameter available in function scope
+  edge @function.params.before_scope -> @param_name.def
+}
+
+// Variable declarations in Zig
+(var_declaration
+  (IDENTIFIER) @name
+  (type_expression)? @type
+  (expression)? @init) @var_decl {
+  // Define variable
+  attr (@name.def) node_definition = @name
+  attr (@name.def) definiens_node = @var_decl
+  attr (@name.def) syntax_type = "variable"
+  
+  // Connect variable definition
+  edge @var_decl.after_scope -> @name.def
+  
+  // Make variable available in scope
+  edge @decl.lexical_defs -> @name.def
+  
+  // Store type information if available
+  if (not (is-empty @type)) {
+    edge @name.def -> @type.type_ref
+  }
+}
+
+// Constant declarations in Zig
+(const_declaration
+  (IDENTIFIER) @name
+  (type_expression)? @type
+  (expression)? @init) @const_decl {
+  // Define constant
+  attr (@name.def) node_definition = @name
+  attr (@name.def) definiens_node = @const_decl
+  attr (@name.def) syntax_type = "constant"
+  attr (@name.def) is_exported
+  
+  // Connect constant definition
+  edge @const_decl.after_scope -> @name.def
+  
+  // Make constant available in scope
+  edge @decl.lexical_defs -> @name.def
+  edge @decl.exports -> @name.def
+  
+  // Store type information if available
+  if (not (is-empty @type)) {
+    edge @name.def -> @type.type_ref
+  }
+}
+
+// Struct declarations in Zig
+(struct_declaration
+  (IDENTIFIER) @name
+  (container_members) @members) @struct {
+  node @struct.after_scope
+  node @struct.members
+  node drop_scope
+  
+  // Define struct
+  attr (@name.def) node_definition = @name
+  attr (@name.def) definiens_node = @struct
+  attr (@name.def) syntax_type = "struct"
+  attr (@name.def) is_exported
+  
+  // Connect struct definition
+  edge @struct.after_scope -> @name.def
+  edge drop_scope -> @struct.bottom
+  
+  // Set up scoping
+  attr (drop_scope) type = "drop_scopes"
+  
+  // Export struct
+  edge @decl.exports -> @name.def
+  edge @decl.type_scope -> @name.def
+  
+  // Propagate scope to struct members
+  edge @members.lexical_scope -> @struct.after_scope
+}
+
+// Enum declarations in Zig
+(enum_declaration
+  (IDENTIFIER) @name
+  (container_members) @members) @enum_decl {
+  node @enum_decl.after_scope
+  node @enum_decl.members
+  node drop_scope
+  
+  // Define enum
+  attr (@name.def) node_definition = @name
+  attr (@name.def) definiens_node = @enum_decl
+  attr (@name.def) syntax_type = "enum"
+  attr (@name.def) is_exported
+  
+  // Connect enum definition
+  edge @enum_decl.after_scope -> @name.def
+  edge drop_scope -> @enum_decl.bottom
+  
+  // Set up scoping
+  attr (drop_scope) type = "drop_scopes"
+  
+  // Export enum
+  edge @decl.exports -> @name.def
+  edge @decl.type_scope -> @name.def
+  
+  // Propagate scope to enum members
+  edge @members.lexical_scope -> @enum_decl.after_scope
+}
+
+// Enum field definitions
+(enum_field
+  (IDENTIFIER) @field_name) @enum_field {
+  // Define enum field
+  attr (@field_name.def) node_definition = @field_name
+  attr (@field_name.def) definiens_node = @enum_field
+  attr (@field_name.def) syntax_type = "enum_field"
+  
+  // Connect enum field definition
+  edge @enum_field.after_scope -> @field_name.def
+  
+  // Make field available in enum scope
+  edge @enum_decl.members -> @field_name.def
+}
+
+// Union declarations in Zig
+(union_declaration
+  (IDENTIFIER) @name
+  (container_members) @members) @union_decl {
+  node @union_decl.after_scope
+  node @union_decl.members
+  node drop_scope
+  
+  // Define union
+  attr (@name.def) node_definition = @name
+  attr (@name.def) definiens_node = @union_decl
+  attr (@name.def) syntax_type = "union"
+  attr (@name.def) is_exported
+  
+  // Connect union definition
+  edge @union_decl.after_scope -> @name.def
+  edge drop_scope -> @union_decl.bottom
+  
+  // Set up scoping
+  attr (drop_scope) type = "drop_scopes"
+  
+  // Export union
+  edge @decl.exports -> @name.def
+  edge @decl.type_scope -> @name.def
+  
+  // Propagate scope to union members
+  edge @members.lexical_scope -> @union_decl.after_scope
+}
+
+// Struct/union field declarations
+(field_declaration
+  (IDENTIFIER) @field_name
+  (type_expression) @field_type) @field {
+  // Define field
+  attr (@field_name.def) node_definition = @field_name
+  attr (@field_name.def) definiens_node = @field
+  attr (@field_name.def) syntax_type = "field"
+  
+  // Connect field definition
+  edge @field.after_scope -> @field_name.def
+  
+  // Make field available in container scope
+  edge @container.members -> @field_name.def
+  
+  // Store type information
+  edge @field_name.def -> @field_type.type_ref
+}
+
+// Import declarations in Zig
+(import_declaration
+  (string_literal) @path
+  (IDENTIFIER) @name) @import {
+  // Define import
+  attr (@name.def) node_definition = @name
+  attr (@name.def) definiens_node = @import
+  attr (@name.def) syntax_type = "import"
+  attr (@name.def) is_exported
+  
+  // Connect import definition
+  edge @import.after_scope -> @name.def
+  
+  // Make import available
+  edge @decl.lexical_defs -> @name.def
+  edge @decl.exports -> @name.def
+  
+  // Store import path
+  node import_path
+  attr (import_path) symbol = (replace (source-text @path) "[\"']" "")
+  attr (import_path) source_node = @path
+  edge @name.def -> import_path
+}
+
+// Using namespace declarations in Zig
+(usingnamespace_declaration
+  (expression) @namespace) @using {
+  // Define namespace use
+  attr (@namespace.def) node_definition = @namespace
+  attr (@namespace.def) definiens_node = @using
+  attr (@namespace.def) syntax_type = "using_namespace"
+  
+  // Connect namespace definition
+  edge @using.after_scope -> @namespace.def
+  
+  // Import namespace
+  edge @decl.namespace_scope -> @namespace.def
+}
+
+// Blocks with scoped variables
+(block) @block {
+  node @block.lexical_scope
+  node @block.lexical_defs
+  node drop_scope
+  
+  // Set up block scope
+  edge @block.lexical_scope -> @decl.lexical_scope
+  edge drop_scope -> @block.bottom
+  attr (drop_scope) type = "drop_scopes"
+}
+
+// Block statements
+(block_statement
+  (_) @stmt) @block_stmt {
+  // Propagate scope to statements
+  edge @stmt.lexical_scope -> @block.lexical_scope
+}
+
+// Field access expressions
+(field_access
+  (expression) @expr
+  (IDENTIFIER) @field) @field_access {
+  node @field_access.ref
+  
+  // Reference field
+  attr (@field_access.ref) node_reference = @field
+  attr (@field_access.ref) syntax_type = "field_access"
+  
+  // Connect field reference 
+  edge @field_access.after -> @field_access.ref
+  
+  // Look up field in type scope
+  edge @field_access.ref -> @expr.type_scope
+}
+
+// Identifiers used as references
+(IDENTIFIER) @id {
+  node @id.ref
+  
+  // Reference identifier
+  attr (@id.ref) node_reference = @id
+  attr (@id.ref) syntax_type = "identifier"
+  
+  // Connect reference to lexical scope
+  edge @id.ref -> @decl.lexical_scope
+}
+
+// Return statements with expressions
+(return_statement
+  (expression)? @expr) @ret {
+  // Connect return type to function return
+  if (not (is-empty @expr)) {
+    edge return_value -> @expr.type_ref
+  }
+}
+
+// Type references
+(type_expression) @type_expr {
+  node @type_expr.type_ref
+  
+  // Connect type expression to type scope
+  edge @type_expr.type_ref -> @decl.type_scope
+}
+
+// If expressions with blocks
+(if_expression
+  (expression) @cond
+  (block) @then
+  (block)? @else) @if_expr {
+  // Propagate scope to condition and blocks
+  edge @cond.lexical_scope -> @decl.lexical_scope
+  edge @then.lexical_scope -> @decl.lexical_scope
+  
+  if (not (is-empty @else)) {
+    edge @else.lexical_scope -> @decl.lexical_scope
+  }
+}
+
+// For expressions with blocks
+(for_expression
+  (expression) @expr
+  (block) @body) @for_expr {
+  // Propagate scope
+  edge @expr.lexical_scope -> @decl.lexical_scope
+  edge @body.lexical_scope -> @decl.lexical_scope
+}
+
+// While expressions with blocks
+(while_expression
+  (expression) @cond
+  (block) @body) @while_expr {
+  // Propagate scope
+  edge @cond.lexical_scope -> @decl.lexical_scope
+  edge @body.lexical_scope -> @decl.lexical_scope
+}
+
+// Switch expressions
+(switch_expression
+  (expression) @expr
+  (switch_prong) @prongs) @switch_expr {
+  // Propagate scope to expression and prongs
+  edge @expr.lexical_scope -> @decl.lexical_scope
+  
+  // Each prong gets the same scope
+  for-each @prongs {
+    edge @prong.lexical_scope -> @decl.lexical_scope
+  }
+}
+
+// Container initializers
+(container_initialization
+  (type_expression) @type
+  (container_initialization_field) @fields) @container_init {
+  // Connect fields to type
+  edge @fields.type_scope -> @type.type_ref
+}
+
+// Error sets
+(error_set_declaration
+  (error_set_field) @fields) @error_set {
+  node @error_set.members
+  
+  // Define error set
+  attr (@error_set.def) node_definition = @error_set
+  attr (@error_set.def) syntax_type = "error_set"
+  
+  // Export error set
+  edge @decl.type_scope -> @error_set.def
+}
+
+// Error set fields
+(error_set_field
+  (IDENTIFIER) @field_name) @error_field {
+  // Define error field
+  attr (@field_name.def) node_definition = @field_name
+  attr (@field_name.def) definiens_node = @error_field
+  attr (@field_name.def) syntax_type = "error_field"
+  
+  // Connect error field definition
+  edge @error_field.after_scope -> @field_name.def
+  
+  // Make field available in error set
+  edge @error_set.members -> @field_name.def
+}
+
+// Comptime blocks
+(comptime_declaration
+  (block) @block) @comptime {
+  // Propagate scope to comptime block
+  edge @block.lexical_scope -> @decl.lexical_scope
+}

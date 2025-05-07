@@ -1,0 +1,283 @@
+;; -*- coding: utf-8 -*-
+;; ------------------------------------------------------------------------------------------------
+;; Copyright © 2023, tsg_indexer authors.
+;; Licensed under either of Apache License, Version 2.0, or MIT license, at your option.
+;; ------------------------------------------------------------------------------------------------
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Stack graphs definition for YAML
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;; Global Variables
+;; ^^^^^^^^^^^^^^^^
+
+global FILE_PATH           ; project relative path of this file
+global PROJECT_NAME = ""   ; project name, used to isolate different projects in the same stack graph
+global ROOT_PATH = ""      ; path to the project root directory
+
+global JUMP_TO_SCOPE_NODE
+global ROOT_NODE
+global SCOPE_ROOT
+
+;; Attribute Shorthands
+;; ^^^^^^^^^^^^^^^^^^^^
+
+attribute node_definition = node        => type = "pop_symbol", node_symbol = node, is_definition
+attribute node_reference = node         => type = "push_symbol", node_symbol = node, is_reference
+attribute pop_node = node               => type = "pop_symbol", node_symbol = node
+attribute pop_scoped_node = node        => type = "pop_scoped_symbol", node_symbol = node
+attribute pop_scoped_symbol = symbol    => type = "pop_scoped_symbol", symbol = symbol
+attribute pop_symbol = symbol           => type = "pop_symbol", symbol = symbol
+attribute push_node = node              => type = "push_symbol", node_symbol = node
+attribute push_scoped_node = node       => type = "push_scoped_symbol", node_symbol = node
+attribute push_scoped_symbol = symbol   => type = "push_scoped_symbol", symbol = symbol
+attribute push_symbol = symbol          => type = "push_symbol", symbol = symbol
+attribute scoped_node_definition = node => type = "pop_scoped_symbol", node_symbol = node, is_definition
+attribute scoped_node_reference = node  => type = "push_scoped_symbol", node_symbol = node, is_reference
+attribute symbol_definition = symbol    => type = "pop_symbol", symbol = symbol, is_definition
+attribute symbol_reference = symbol     => type = "push_symbol", symbol = symbol, is_reference
+
+attribute node_symbol = node            => symbol = (source-text node), source_node = node
+
+;; Root Document
+;; ^^^^^^^^^^^
+
+(stream) @root {
+  node @root.defs
+  node @root.exports
+  node @root.lexical_defs
+  node @root.lexical_scope
+  
+  ; Connect document to global scope
+  edge @root.lexical_scope -> SCOPE_ROOT
+  edge @root.lexical_scope -> @root.defs
+}
+
+;; YAML Document
+;; ^^^^^^^^^^^
+
+(document) @document {
+  node @document.defs
+  node @document.exports
+  node @document.lexical_scope
+  
+  ; Connect document to parent scope
+  edge @document.lexical_scope -> @document.before_scope
+  edge @document.lexical_scope -> @document.defs
+}
+
+;; Mapping (Dictionary/Object)
+;; ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+(block_mapping) @mapping {
+  node @mapping.defs
+  node @mapping.lexical_scope
+  
+  ; Connect mapping to parent scope
+  edge @mapping.lexical_scope -> @mapping.before_scope
+  edge @mapping.lexical_scope -> @mapping.defs
+}
+
+(flow_mapping) @flow_mapping {
+  node @flow_mapping.defs
+  node @flow_mapping.lexical_scope
+  
+  ; Connect flow mapping to parent scope
+  edge @flow_mapping.lexical_scope -> @flow_mapping.before_scope
+  edge @flow_mapping.lexical_scope -> @flow_mapping.defs
+}
+
+;; Mapping Pair (Key-Value Pair)
+;; ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+(block_mapping_pair
+  key: (flow_node) @key
+  value: (_) @value) @pair {
+  node @pair.defs
+  
+  ; Define the key as a mapping key
+  attr (@key.def) node_definition = @key
+  attr (@key.def) definiens_node = @pair
+  attr (@key.def) syntax_type = "mapping_key"
+  
+  ; Connect key to mapping scope
+  edge @pair.after_scope -> @key.def
+  
+  ; Connect value to key
+  edge @value.before_scope -> @pair.before_scope
+}
+
+(block_mapping_pair
+  key: (block_node) @key
+  value: (_) @value) @pair {
+  node @pair.defs
+  
+  ; Define the key as a mapping key
+  attr (@key.def) node_definition = @key
+  attr (@key.def) definiens_node = @pair
+  attr (@key.def) syntax_type = "mapping_key"
+  
+  ; Connect key to mapping scope
+  edge @pair.after_scope -> @key.def
+  
+  ; Connect value to key
+  edge @value.before_scope -> @pair.before_scope
+}
+
+(flow_pair
+  key: (flow_node) @key
+  value: (flow_node) @value) @flow_pair {
+  node @flow_pair.defs
+  
+  ; Define the key as a mapping key
+  attr (@key.def) node_definition = @key
+  attr (@key.def) definiens_node = @flow_pair
+  attr (@key.def) syntax_type = "mapping_key"
+  
+  ; Connect key to mapping scope
+  edge @flow_pair.after_scope -> @key.def
+  
+  ; Connect value to key
+  edge @value.before_scope -> @flow_pair.before_scope
+}
+
+;; Sequences (Arrays/Lists)
+;; ^^^^^^^^^^^^^^^^^^^^^^
+
+(block_sequence) @sequence {
+  node @sequence.defs
+  node @sequence.lexical_scope
+  
+  ; Connect sequence to parent scope
+  edge @sequence.lexical_scope -> @sequence.before_scope
+  edge @sequence.lexical_scope -> @sequence.defs
+}
+
+(flow_sequence) @flow_sequence {
+  node @flow_sequence.defs
+  node @flow_sequence.lexical_scope
+  
+  ; Connect flow sequence to parent scope
+  edge @flow_sequence.lexical_scope -> @flow_sequence.before_scope
+  edge @flow_sequence.lexical_scope -> @flow_sequence.defs
+}
+
+;; Sequence Items
+;; ^^^^^^^^^^^^
+
+(block_sequence_item
+  (flow_node) @item) @seq_item {
+  ; Connect item to sequence
+  edge @item.before_scope -> @seq_item.before_scope
+}
+
+(block_sequence_item
+  (block_node) @item) @seq_item {
+  ; Connect item to sequence
+  edge @item.before_scope -> @seq_item.before_scope
+}
+
+;; Anchors and Aliases (YAML's Reference System)
+;; ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+(anchor
+  name: (anchor_name) @name) @anchor {
+  node @anchor.defs
+  
+  ; Define the anchor as a named reference
+  attr (@name.def) node_definition = @name
+  attr (@name.def) definiens_node = @anchor
+  attr (@name.def) syntax_type = "anchor"
+  
+  ; Connect anchor to parent scope
+  edge @anchor.after_scope -> @name.def
+  
+  ; Anchors are exported throughout the document
+  attr (@name.def) is_exported
+}
+
+(alias
+  name: (alias_name) @name) @alias {
+  node @alias.ref
+  
+  ; Reference the anchor
+  attr (@alias.ref) node_reference = @name
+  
+  ; Connect alias reference to scope
+  edge @alias.ref -> @alias.before_scope
+}
+
+;; String Literals
+;; ^^^^^^^^^^^^^
+
+(double_quote_scalar) @string {
+  ; No specific action for simple scalar values
+}
+
+(single_quote_scalar) @string {
+  ; No specific action for simple scalar values
+}
+
+(block_scalar) @block_string {
+  ; No specific action for simple scalar values
+}
+
+;; Plain Scalars
+;; ^^^^^^^^^^^
+
+(plain_scalar) @scalar {
+  node @scalar.ref
+  node @scalar.def
+  
+  ; Plain scalars could be references or definitions depending on context
+  ; Here we create the reference node that might be used by other rules
+  attr (@scalar.ref) node_reference = @scalar
+  
+  ; Connect reference to scope
+  edge @scalar.ref -> @scalar.before_scope
+}
+
+;; Merge Key Support (<<)
+;; ^^^^^^^^^^^^^^^^^^^
+
+(block_mapping_pair
+  key: (flow_node
+        (plain_scalar) @merge_key)
+  value: (_) @merged_value) @merge_pair {
+  
+  ; Only handle the specific "<<" merge key
+  if string_equal (source-text @merge_key) "<<" {
+    ; Connect the merged value directly to the mapping scope
+    edge @merged_value.before_scope -> @merge_pair.before_scope
+  }
+}
+
+;; YAML Tags
+;; ^^^^^^^
+
+(tag) @tag {
+  ; Tags describe the type of the node but don't create references by themselves
+}
+
+;; Nested Objects (where YAML keys can refer to complex structures)
+;; ^^^^^^^^^^^^^^
+
+(block_mapping_pair
+  key: (flow_node (plain_scalar) @key)
+  value: (block_mapping) @nested_mapping) @nested_pair {
+  node @nested_pair.defs
+  
+  ; Define the key as a nested structure key
+  attr (@key.def) node_definition = @key
+  attr (@key.def) definiens_node = @nested_pair
+  attr (@key.def) syntax_type = "nested_mapping_key"
+  
+  ; Connect key to mapping scope
+  edge @nested_pair.after_scope -> @key.def
+  
+  ; Connect nested mapping to key
+  edge @nested_mapping.before_scope -> @nested_pair.before_scope
+}
+
+;; The End
+;; ^^^^^^

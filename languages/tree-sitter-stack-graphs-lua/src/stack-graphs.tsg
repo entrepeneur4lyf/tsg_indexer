@@ -1,0 +1,622 @@
+;; -*- coding: utf-8 -*-
+;; ------------------------------------------------------------------------------------------------
+;; Copyright © 2023, tsg_indexer authors.
+;; Licensed under either of Apache License, Version 2.0, or MIT license, at your option.
+;; ------------------------------------------------------------------------------------------------
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Stack graphs definition for Lua
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;; Global Variables
+;; ^^^^^^^^^^^^^^^^
+
+global FILE_PATH           ; project relative path of this file
+global PROJECT_NAME = ""   ; project name, used to isolate different projects in the same stack graph
+global ROOT_PATH = ""      ; path to the project root directory
+
+global JUMP_TO_SCOPE_NODE
+global ROOT_NODE
+global SCOPE_ROOT
+
+;; Attribute Shorthands
+;; ^^^^^^^^^^^^^^^^^^^^
+
+attribute node_definition = node        => type = "pop_symbol", node_symbol = node, is_definition
+attribute node_reference = node         => type = "push_symbol", node_symbol = node, is_reference
+attribute pop_node = node               => type = "pop_symbol", node_symbol = node
+attribute pop_scoped_node = node        => type = "pop_scoped_symbol", node_symbol = node
+attribute pop_scoped_symbol = symbol    => type = "pop_scoped_symbol", symbol = symbol
+attribute pop_symbol = symbol           => type = "pop_symbol", symbol = symbol
+attribute push_node = node              => type = "push_symbol", node_symbol = node
+attribute push_scoped_node = node       => type = "push_scoped_symbol", node_symbol = node
+attribute push_scoped_symbol = symbol   => type = "push_scoped_symbol", symbol = symbol
+attribute push_symbol = symbol          => type = "push_symbol", symbol = symbol
+attribute scoped_node_definition = node => type = "pop_scoped_symbol", node_symbol = node, is_definition
+attribute scoped_node_reference = node  => type = "push_scoped_symbol", node_symbol = node, is_reference
+attribute symbol_definition = symbol    => type = "pop_symbol", symbol = symbol, is_definition
+attribute symbol_reference = symbol     => type = "push_symbol", symbol = symbol, is_reference
+
+attribute node_symbol = node            => symbol = (source-text node), source_node = node
+
+;; Root Node
+;; ^^^^^^^^^
+
+(chunk) @root {
+  node @root.defs
+  node @root.exports
+  node @root.lexical_defs
+  node @root.lexical_scope
+  node @root.type_scope
+  node @root.namespace_scope
+  
+  ; Connect source file to global scope
+  edge @root.lexical_scope -> SCOPE_ROOT
+  edge @root.lexical_scope -> @root.defs
+}
+
+;; Global Function Definitions
+;; ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+(function_declaration
+  name: (identifier) @name
+  parameters: (parameters) @params
+  body: (block) @body) @function {
+  node @function.defs
+  node @function.exports
+  node @function.lexical_scope
+  node @function.call
+  node @function.return_value
+  node @function.drop_scope
+  
+  ; Define the function
+  attr (@name.def) node_definition = @name
+  attr (@name.def) definiens_node = @function
+  attr (@name.def) syntax_type = "function"
+  
+  ; Connect function to parent scope
+  edge @function.lexical_scope -> @function.before_scope
+  edge @function.lexical_scope -> @function.defs
+  
+  ; Connect the function definition
+  edge @function.after_scope -> @name.def
+  edge @name.def -> @function.call
+  
+  ; Connect the function body and parameters
+  edge @params.before_scope -> @function.lexical_scope
+  edge @body.before_scope -> @params.after_scope
+  
+  ; Connect function calls
+  edge @function.call -> @function.return_value
+  edge @function.drop_scope -> @function.bottom
+  
+  ; Set node attributes
+  attr (@function.call) pop_scoped_symbol = "()"
+  attr (@function.drop_scope) type = "drop_scopes"
+  attr (@function.return_value) is_exported
+  
+  ; Global functions are exported
+  attr (@name.def) is_exported
+}
+
+;; Method Definitions (functions with dot notation)
+;; ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+(function_declaration
+  name: (dot_index_expression
+    table: (identifier) @table
+    field: (identifier) @field)
+  parameters: (parameters) @params
+  body: (block) @body) @method {
+  node @method.defs
+  node @method.exports
+  node @method.lexical_scope
+  node @method.call
+  node @method.return_value
+  node @method.drop_scope
+  
+  ; Define the method
+  attr (@field.def) node_definition = @field
+  attr (@field.def) definiens_node = @method
+  attr (@field.def) syntax_type = "method"
+  
+  ; Connect method to parent scope
+  edge @method.lexical_scope -> @method.before_scope
+  edge @method.lexical_scope -> @method.defs
+  
+  ; Connect the method definition
+  edge @method.after_scope -> @field.def
+  edge @field.def -> @method.call
+  
+  ; Connect the table to the method
+  edge @field.def -> @table.ref
+  
+  ; Connect the method body and parameters
+  edge @params.before_scope -> @method.lexical_scope
+  edge @body.before_scope -> @params.after_scope
+  
+  ; Connect method calls
+  edge @method.call -> @method.return_value
+  edge @method.drop_scope -> @method.bottom
+  
+  ; Set node attributes
+  attr (@method.call) pop_scoped_symbol = "()"
+  attr (@method.drop_scope) type = "drop_scopes"
+  attr (@method.return_value) is_exported
+  
+  ; Methods are exported
+  attr (@field.def) is_exported
+}
+
+;; Object Method Definitions (functions with colon notation)
+;; ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+(function_declaration
+  name: (method_index_expression
+    table: (identifier) @table
+    method: (identifier) @method)
+  parameters: (parameters) @params
+  body: (block) @body) @obj_method {
+  node @obj_method.defs
+  node @obj_method.exports
+  node @obj_method.lexical_scope
+  node @obj_method.call
+  node @obj_method.return_value
+  node @obj_method.drop_scope
+  
+  ; Define the object method
+  attr (@method.def) node_definition = @method
+  attr (@method.def) definiens_node = @obj_method
+  attr (@method.def) syntax_type = "object_method"
+  
+  ; Connect method to parent scope
+  edge @obj_method.lexical_scope -> @obj_method.before_scope
+  edge @obj_method.lexical_scope -> @obj_method.defs
+  
+  ; Connect the method definition
+  edge @obj_method.after_scope -> @method.def
+  edge @method.def -> @obj_method.call
+  
+  ; Connect the table to the method
+  edge @method.def -> @table.ref
+  
+  ; Connect the method body and parameters
+  edge @params.before_scope -> @obj_method.lexical_scope
+  edge @body.before_scope -> @params.after_scope
+  
+  ; Connect method calls
+  edge @obj_method.call -> @obj_method.return_value
+  edge @obj_method.drop_scope -> @obj_method.bottom
+  
+  ; Set node attributes
+  attr (@obj_method.call) pop_scoped_symbol = "()"
+  attr (@obj_method.drop_scope) type = "drop_scopes"
+  attr (@obj_method.return_value) is_exported
+  
+  ; Object methods are exported
+  attr (@method.def) is_exported
+}
+
+;; Local Function Definitions
+;; ^^^^^^^^^^^^^^^^^^^^^^^^
+
+(local_function
+  name: (identifier) @name
+  parameters: (parameters) @params
+  body: (block) @body) @local_function {
+  node @local_function.defs
+  node @local_function.lexical_scope
+  node @local_function.call
+  node @local_function.return_value
+  node @local_function.drop_scope
+  
+  ; Define the local function
+  attr (@name.def) node_definition = @name
+  attr (@name.def) definiens_node = @local_function
+  attr (@name.def) syntax_type = "local_function"
+  
+  ; Connect function to parent scope
+  edge @local_function.lexical_scope -> @local_function.before_scope
+  edge @local_function.lexical_scope -> @local_function.defs
+  
+  ; Connect the function definition
+  edge @local_function.after_scope -> @name.def
+  edge @name.def -> @local_function.call
+  
+  ; Connect the function body and parameters
+  edge @params.before_scope -> @local_function.lexical_scope
+  edge @body.before_scope -> @params.after_scope
+  
+  ; Connect function calls
+  edge @local_function.call -> @local_function.return_value
+  edge @local_function.drop_scope -> @local_function.bottom
+  
+  ; Set node attributes
+  attr (@local_function.call) pop_scoped_symbol = "()"
+  attr (@local_function.drop_scope) type = "drop_scopes"
+  attr (@local_function.return_value) is_exported
+}
+
+;; Anonymous Function Expressions
+;; ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+(function
+  parameters: (parameters) @params
+  body: (block) @body) @anon_function {
+  node @anon_function.defs
+  node @anon_function.lexical_scope
+  node @anon_function.call
+  node @anon_function.return_value
+  node @anon_function.drop_scope
+  
+  ; Connect function to parent scope
+  edge @anon_function.lexical_scope -> @anon_function.before_scope
+  edge @anon_function.lexical_scope -> @anon_function.defs
+  
+  ; Connect the function body and parameters
+  edge @params.before_scope -> @anon_function.lexical_scope
+  edge @body.before_scope -> @params.after_scope
+  
+  ; Connect function calls
+  edge @anon_function.call -> @anon_function.return_value
+  edge @anon_function.drop_scope -> @anon_function.bottom
+  
+  ; Set node attributes
+  attr (@anon_function.call) pop_scoped_symbol = "()"
+  attr (@anon_function.drop_scope) type = "drop_scopes"
+  attr (@anon_function.return_value) is_exported
+}
+
+;; Function Parameters
+;; ^^^^^^^^^^^^^^^^^
+
+(parameters) @params {
+  node @params.before_scope
+  node @params.after_scope
+}
+
+(identifier) @param {
+  ; Check if this is a parameter (inside parameters)
+  if parent-type "parameters" {
+    ; Define the parameter
+    attr (@param.def) node_definition = @param
+    attr (@param.def) syntax_type = "parameter"
+    
+    ; Connect parameter to params list
+    edge @params.after_scope -> @param.def
+  }
+}
+
+;; Variable Assignments (Single)
+;; ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+(assignment_statement
+  variables: (variable_list
+    (identifier) @var)
+  values: (expression_list
+    (_) @value)) @assignment {
+  node @assignment.defs
+  
+  ; Define the variable
+  attr (@var.def) node_definition = @var
+  attr (@var.def) definiens_node = @assignment
+  attr (@var.def) syntax_type = "variable"
+  
+  ; Connect variable to parent scope
+  edge @assignment.after_scope -> @var.def
+  
+  ; Connect value to variable
+  edge @value.before_scope -> @assignment.before_scope
+  
+  ; Global variables are exported
+  if not-in-scope "function" "for_statement" "local_variable_declaration" "local_function" {
+    attr (@var.def) is_exported
+  }
+}
+
+;; Table Field Assignments
+;; ^^^^^^^^^^^^^^^^^^^^^
+
+(assignment_statement
+  variables: (variable_list
+    (dot_index_expression
+      table: (identifier) @table
+      field: (identifier) @field))
+  values: (expression_list
+    (_) @value)) @field_assignment {
+  node @field_assignment.defs
+  
+  ; Define the field
+  attr (@field.def) node_definition = @field
+  attr (@field.def) definiens_node = @field_assignment
+  attr (@field.def) syntax_type = "field"
+  
+  ; Connect field to parent scope
+  edge @field_assignment.after_scope -> @field.def
+  
+  ; Connect table to field
+  edge @field.def -> @table.ref
+  
+  ; Connect value to field
+  edge @value.before_scope -> @field_assignment.before_scope
+  
+  ; Fields are exported
+  attr (@field.def) is_exported
+}
+
+;; Local Variable Declarations
+;; ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+(local_variable_declaration
+  names: (variable_list
+    (identifier) @var)
+  values: (expression_list
+    (_) @value)?) @local_var {
+  node @local_var.defs
+  
+  ; Define the local variable
+  attr (@var.def) node_definition = @var
+  attr (@var.def) definiens_node = @local_var
+  attr (@var.def) syntax_type = "local_variable"
+  
+  ; Connect local variable to parent scope
+  edge @local_var.after_scope -> @var.def
+  
+  ; Connect value to local variable if present
+  if present @value {
+    edge @value.before_scope -> @local_var.before_scope
+  }
+}
+
+;; Table Definitions
+;; ^^^^^^^^^^^^^^^
+
+(table_constructor
+  (field
+    name: (identifier) @field_name
+    value: (_) @field_value)) @table {
+  ; Define the field
+  attr (@field_name.def) node_definition = @field_name
+  attr (@field_name.def) definiens_node = @table
+  attr (@field_name.def) syntax_type = "table_field"
+  
+  ; Connect field to table
+  edge @table.after_scope -> @field_name.def
+  
+  ; Connect value to field
+  edge @field_value.before_scope -> @table.before_scope
+}
+
+;; Table Variable Declarations
+;; ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+(local_variable_declaration
+  names: (variable_list
+    (identifier) @var)
+  values: (expression_list
+    (table_constructor) @table)) @table_var {
+  node @table_var.defs
+  
+  ; Define the table variable
+  attr (@var.def) node_definition = @var
+  attr (@var.def) definiens_node = @table_var
+  attr (@var.def) syntax_type = "table"
+  
+  ; Connect table variable to parent scope
+  edge @table_var.after_scope -> @var.def
+  
+  ; Connect table to variable
+  edge @table.before_scope -> @table_var.before_scope
+}
+
+;; Global Table Variable Declarations
+;; ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+(assignment_statement
+  variables: (variable_list
+    (identifier) @var)
+  values: (expression_list
+    (table_constructor) @table)) @global_table {
+  node @global_table.defs
+  
+  ; Define the global table variable
+  attr (@var.def) node_definition = @var
+  attr (@var.def) definiens_node = @global_table
+  attr (@var.def) syntax_type = "table"
+  
+  ; Connect global table variable to parent scope
+  edge @global_table.after_scope -> @var.def
+  
+  ; Connect table to variable
+  edge @table.before_scope -> @global_table.before_scope
+  
+  ; Global tables are exported
+  if not-in-scope "function" "for_statement" "local_variable_declaration" "local_function" {
+    attr (@var.def) is_exported
+  }
+}
+
+;; Function Calls
+;; ^^^^^^^^^^^^^
+
+(function_call
+  name: (identifier) @func
+  arguments: (arguments) @args) @call {
+  node @call.ref
+  node @call.args
+  
+  ; Reference the function
+  attr (@call.ref) node_reference = @func
+  
+  ; Connect call to arguments
+  edge @args.before_scope -> @call.before_scope
+}
+
+;; Method Calls (dot notation)
+;; ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+(function_call
+  name: (dot_index_expression
+    table: (identifier) @table
+    field: (identifier) @field)
+  arguments: (arguments) @args) @method_call {
+  node @method_call.ref
+  node @method_call.args
+  
+  ; Reference the method
+  attr (@method_call.ref) node_reference = @field
+  
+  ; Connect method call to table and arguments
+  edge @method_call.ref -> @table.ref
+  edge @args.before_scope -> @method_call.before_scope
+}
+
+;; Object Method Calls (colon notation)
+;; ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+(function_call
+  name: (method_index_expression
+    table: (identifier) @table
+    method: (identifier) @method)
+  arguments: (arguments) @args) @obj_method_call {
+  node @obj_method_call.ref
+  node @obj_method_call.args
+  
+  ; Reference the object method
+  attr (@obj_method_call.ref) node_reference = @method
+  
+  ; Connect object method call to table and arguments
+  edge @obj_method_call.ref -> @table.ref
+  edge @args.before_scope -> @obj_method_call.before_scope
+}
+
+;; Table Field Access
+;; ^^^^^^^^^^^^^^^^
+
+(dot_index_expression
+  table: (identifier) @table
+  field: (identifier) @field) @field_access {
+  node @field_access.ref
+  
+  ; Reference the field
+  attr (@field_access.ref) node_reference = @field
+  
+  ; Connect field access to table
+  edge @field_access.ref -> @table.ref
+}
+
+;; Variable References
+;; ^^^^^^^^^^^^^^^^^
+
+(identifier) @var {
+  node @var.ref
+  node @var.def
+  
+  ; Check if this is not a parameter (already handled)
+  if not-parent-type "parameters" {
+    ; Reference the variable
+    attr (@var.ref) node_reference = @var
+    
+    ; Connect reference to scope
+    edge @var.ref -> @var.before_scope
+  }
+}
+
+;; Block Structure
+;; ^^^^^^^^^^^^^
+
+(block) @block {
+  node @block.before_scope
+  node @block.after_scope
+  node @block.defs
+  
+  ; Connect block to parent scope and its own scope
+  edge @block.before_scope -> @block.defs
+}
+
+(block (_) @stmt .) @block {
+  ; Connect first statement to block
+  edge @block.after_scope -> @stmt.after_scope
+}
+
+(block (_) @stmt1 . (_) @stmt2) {
+  ; Connect statements in sequence
+  edge @stmt2.before_scope -> @stmt1.after_scope
+}
+
+(block . (_) @stmt) @block {
+  ; Connect block to its first statement
+  edge @stmt.before_scope -> @block.before_scope
+}
+
+;; For Loop Variable Declarations
+;; ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+(for_generic_clause
+  variables: (variable_list
+    (identifier) @var)) @for_var {
+  ; Define the for loop variable
+  attr (@var.def) node_definition = @var
+  attr (@var.def) definiens_node = @for_var
+  attr (@var.def) syntax_type = "loop_variable"
+  
+  ; Connect loop variable to for clause
+  edge @for_var.after_scope -> @var.def
+}
+
+(for_numeric_clause
+  variable: (identifier) @var) @for_numeric {
+  ; Define the numeric for loop variable
+  attr (@var.def) node_definition = @var
+  attr (@var.def) definiens_node = @for_numeric
+  attr (@var.def) syntax_type = "loop_variable"
+  
+  ; Connect loop variable to for clause
+  edge @for_numeric.after_scope -> @var.def
+}
+
+;; For Loops
+;; ^^^^^^^^
+
+(for_statement
+  body: (block) @body) @for {
+  node @for.defs
+  node @for.lexical_scope
+  
+  ; Connect for loop to parent scope
+  edge @for.lexical_scope -> @for.before_scope
+  edge @for.lexical_scope -> @for.defs
+  
+  ; Connect body to for loop
+  edge @body.before_scope -> @for.lexical_scope
+}
+
+;; Require Statements (Module Imports)
+;; ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+(function_call
+  name: (identifier) @require_func
+  arguments: (arguments 
+    (string) @module_path)) @require {
+  ; Check if this is a require call
+  let func_name = (source-text @require_func)
+  if equals func_name "require" {
+    node import_node
+    
+    ; Extract module path from the string
+    let path = (source-text @module_path)
+    ; Remove quotes
+    let clean_path = (replace path "\"" "")
+    let clean_path = (replace clean_path "'" "")
+    
+    ; Define the import
+    attr (import_node) pop_symbol = clean_path, is_definition, source_node = @require
+    attr (import_node) syntax_type = "require"
+    
+    ; Connect require statement to parent scope
+    edge @require.after_scope -> import_node
+  }
+}
+
+;; The End
+;; ^^^^^^
