@@ -4,7 +4,18 @@ A library for indexing code repositories using Tree-sitter Stack Graphs, designe
 
 ## Overview
 
+TSG Indexer is a Rust library that uses Tree-sitter Stack Graphs to analyze code repositories and build graph representations of code structure. It captures relationships between definitions and references across files, enabling powerful code navigation and analysis capabilities.
+
+Key features:
+
 TSG Indexer is a library that uses [tree-sitter-stack-graphs](https://github.com/github/stack-graphs) to analyze code repositories and build a graph representation of the code structure. This graph captures the relationships between definitions and references across files, enabling powerful code navigation and analysis.
+
+Support for 20+ programming languages including Rust, Python, JavaScript, TypeScript, Java, and more
+Recursive directory traversal for comprehensive codebase analysis
+Multiple output formats (JSON, DOT graph)
+Optional CLI and LSP support via feature flags
+Ability to generate TSG files for unsupported languages
+The library is designed to be integrated with Model Control Protocol (MCP) servers and other tools that need code indexing and navigation capabilities. It leverages the tree-sitter parsing system and stack-graphs technology from GitHub to create a comprehensive code analysis solution.
 
 ## Features
 
@@ -54,7 +65,7 @@ Or clone and build the repository:
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/tsg_indexer.git
+git clone https://github.com/entrepeneur4lyf/tsg_indexer.git
 cd tsg_indexer
 
 # Build the project
@@ -135,7 +146,7 @@ Contributions are welcome! Here are some ways you can contribute:
 
 ## License
 
-MIT License
+MIT License & Apache 2.0 License - I am not 100% sure how to properly license this lol.
 
 ## Acknowledgments
 
